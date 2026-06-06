@@ -27,7 +27,7 @@ def generate_random_data(rows, cols, p=0.5):
     shape = (rows, cols)
     N = rows * cols
 
-    dense_bool_mask = torch.rand(N, device="cuda") < 0.1
+    dense_bool_mask = torch.rand(N, device="cuda") < 0.5
     packed_mask = pack_bool_mask(dense_bool_mask)
 
     vals = torch.randn(dense_bool_mask.sum().item(), device="cuda")
@@ -59,7 +59,7 @@ def evaluate_kernel(reconstruct_bitmask):
         # Time main run
         torch.cuda.synchronize()
         start = time.perf_counter()
-        for _ in range(100):
+        for _ in range(200):
             out = reconstruct_bitmask(vals, packed_mask, shape)
         torch.cuda.synchronize()
         end = time.perf_counter()
