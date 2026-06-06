@@ -66,7 +66,7 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
     _reconstruct_packed_kernel[(n_blocks,)](
         vals,
         packed_mask,
-        block_prefix.to(torch.int32),
+        block_prefix,
         out,
         N=N,
         BLOCK=block,
