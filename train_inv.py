@@ -16,7 +16,7 @@ def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
 
 
 @triton.jit
-def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, packed_mask_out,
+def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
                      N: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
@@ -30,11 +30,25 @@ def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, packed_mask_out,
 
     write_vals = valid & is_nz
     tl.store(vals_out + base + local_count, x, mask=write_vals)
+    tl.store(mask_dense + offs, is_nz.to(tl.uint8), mask=valid)
 
-    byte_idx = offs // 8
-    bit_pos = offs % 8
-    bit_val = is_nz.to(tl.int32) << bit_pos
-    tl.atomic_or(packed_mask_out + byte_idx, bit_val, mask=valid)
+
+@triton.jit
+def _pack_mask_kernel(mask_dense, packed_mask_out,
+                      N: tl.constexpr, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    n_bytes = tl.cdiv(N, 8)
+    byte_mask = offs < n_bytes
+
+    byte_val = tl.zeros([BLOCK], dtype=tl.int32)
+    for b in tl.static_range(8):
+        elem_offs = offs * 8 + b
+        in_bounds = (elem_offs < N) & byte_mask
+        m = tl.load(mask_dense + elem_offs, mask=in_bounds, other=0).to(tl.int32)
+        byte_val += m << b
+
+    tl.store(packed_mask_out + offs, byte_val.to(tl.uint8), mask=byte_mask)
 
 
 def compress_dense(dense, shape, block=8192):
@@ -63,16 +77,16 @@ def compress_dense(dense, shape, block=8192):
 
     total_count = block_prefix[-1] + block_counts[-1]
     vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
-    packed_mask = torch.zeros(n_bytes, device=dense.device, dtype=torch.uint8)
+    mask_dense = torch.empty(N, device=dense.device, dtype=torch.uint8)
 
     _compress_kernel[(n_blocks,)](
-        flat,
-        block_prefix,
-        vals,
-        packed_mask,
-        N=N,
-        BLOCK=block,
-        num_warps=8,
+        flat, block_prefix, vals, mask_dense, N=N, BLOCK=block, num_warps=8,
+    )
+
+    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
+    n_pack_blocks = triton.cdiv(n_bytes, block // 8)
+    _pack_mask_kernel[(n_pack_blocks,)](
+        mask_dense, packed_mask, N=N, BLOCK=block // 8, num_warps=8,
     )
 
     return vals, packed_mask
