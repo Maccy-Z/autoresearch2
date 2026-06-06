@@ -2,33 +2,40 @@
 
 This is an experiment to have the LLM do its own research to improve a Triton kernel.
 
+The repo supports **multiple tasks**, each in its own subfolder. Every task has a prepare script (read-only evaluation harness) and a train script (the file you modify, containing the Triton kernel). For example:
+
+- `forward/` — `prepare.py` + `train.py`
+- `inverse/` — `prepare_inv.py` + `train_inv.py`
+- `<task>/` — `prepare*.py` + `train*.py` (exact filenames may vary; discover them by listing the folder)
+
 ## Setup
 
 To set up a new experiment, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `jun6`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
-2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
-3. **Read the in-scope files**: The repo is small. Read these files for full context:
-   - `prepare.py` — fixed evaluation harness, data generation, correctness checking. Do not modify.
-   - `train.py` — the file you modify. Contains the Triton kernel and kernel loading function.
-4. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
-5. **Confirm and go**: Confirm setup looks good.
+1. **Pick a task**: e.g. `forward` or `inverse`. The task subfolder contains the code for that experiment. Ask the user which task they want to work on.
+2. **Agree on a run tag**: propose a tag based on today's date (e.g. `jun6`). The branch `autoresearch/<task>/<tag>` must not already exist — this is a fresh run.
+3. **Create the branch**: `git checkout -b autoresearch/<task>/<tag>` from current master.
+4. **Read the in-scope files**: List the task folder to find the exact filenames, then read both files for full context:
+   - `{task}/prepare*.py` — fixed evaluation harness, data generation, correctness checking. **Do not modify.**
+   - `{task}/train*.py` — the file you modify. Contains the Triton kernel(s) and the function under test.
+5. **Initialize results.tsv**: Create `results_{task}.tsv` with just the header row. The baseline will be recorded after the first run.
+6. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs on a single GPU. You launch it simply as: `python3 train.py` (after ensuring the mamba env `optimizer` is active) .
+Each experiment runs on a single GPU. You launch it from the repo root as: `python3 {task}/train*.py` (after ensuring the mamba env `optimizer` is active). The train script imports its matching prepare script via a local `sys.path` adjustment, so run it from the repo root — the working directory matters.
 
 **What you CAN do:**
-- Modify `train.py` — this is the only file you edit. Almost everything is fair game, just no cheating.
-- Change the Triton kernel (`_reconstruct_packed_kernel`) — block size, grid strategy, memory access patterns, use of atomics, etc.
-- Change the host-side `reconstruct_bitmask` function — different ways to compute block prefixes, different launch parameters, etc.
-- Add new Triton kernels (e.g., a Triton prefix-sum kernel to replace the PyTorch prefix computation).
+- Modify `{task}/train*.py` — this is the only file you edit. Almost everything is fair game, just no cheating.
+- Change Triton kernels — block size, grid strategy, memory access patterns, use of atomics, etc.
+- Change host-side helper functions — different ways to compute block prefixes, different launch parameters, etc.
+- Add new Triton kernels (e.g., a Triton prefix-sum kernel to replace a PyTorch-side computation).
 - Tune kernel launch parameters like `BLOCK` size, number of warps, etc.
 
 **What you CANNOT do:**
-- Modify `prepare.py`. It is read-only. It contains the fixed evaluation, data generation, and correctness checks.
+- Modify `{task}/prepare*.py`. It is read-only. It contains the fixed evaluation, data generation, and correctness checks.
 - Install new packages or add dependencies. You can only use what's already in this env.
 - Change the evaluation harness or the data generation.
 
@@ -62,7 +69,7 @@ NOTE: Lower is better. The total time is the sum of per-shape average times (eac
 
 ## Logging results
 
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+When an experiment is done, log it to `results_{task}.tsv` (tab-separated, NOT comma-separated — commas break in descriptions). Each task gets its own results file.
 
 The TSV has a header row and 4 columns:
 
@@ -87,19 +94,19 @@ d4e5f6g	0.0000	crash	add triton prefix kernel (invalid memory access)
 
 ## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `autoresearch/jun6`).
+The experiment runs on a dedicated branch (e.g. `autoresearch/forward/jun6`).
 Before starting, make sure any needed env is activated.
 LOOP FOREVER:
 
-1. Look at the git state: the current branch/commit we're on
-2. Tune `train.py` with an experimental idea by directly hacking the code.
+1. Look at the git state: the current branch/commit we're on.
+2. Tune `{task}/train*.py` with an experimental idea by directly hacking the code.
 3. git commit
-4. Run the experiment: `python3 train.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
+4. Run the experiment: `python3 {task}/train*.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context; replace `{task}` and the wildcard with the actual filenames)
 5. Read out the results: Check that "passed" appears (correctness). Then get the total: `grep "^Total time:" run.log`. The rest of the log may be useful.
 6. If the output is missing "passed" or errors appear, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-8. If Total time improved (lower), you "advance" the branch, keeping the git commit
-9. If Total time is equal or worse, you git reset back to where you started
+7. Record the results in the tsv (`results_{task}.tsv`) — NOTE: do not commit the results.tsv file, leave it untracked by git.
+8. If Total time improved (lower), you "advance" the branch, keeping the git commit.
+9. If Total time is equal or worse, you git reset back to where you started.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this sparingly.
 
@@ -117,8 +124,8 @@ Here are some directions worth exploring:
 
 - **Block size tuning**: Try different `BLOCK` values (128, 512, 1024) — tradeoff between parallelism and register pressure.
 - **Triton prefix-sum kernel**: Replace the PyTorch-side prefix computation with a GPU-side Triton kernel to avoid the host-device round trip.
-- **Fused kernel**: Combine the bit-unpacking and prefix-sum into a single Triton kernel (currently done partially in Python/PyTorch).
+- **Fused kernel**: Combine multiple steps (e.g., bit-unpacking and prefix-sum) into a single Triton kernel (currently done partially in Python/PyTorch).
 - **Memory coalescing**: Adjust access patterns to maximize memory bandwidth utilization.
 - **Grid strategy**: Use 2D grids, multiple program IDs, or different work distribution.
-- **Auto-tuning**: Use `@triton.autotune` to search for optimal configurations automatically.
+- **Auto-tuning**: Use `@triton.autotune` to search for optimal configurations automatically. This may not be available in all environments — check first.
 - **Pipeline optimization**: Use `tl.async_copy` or other Triton features to overlap compute and memory.
