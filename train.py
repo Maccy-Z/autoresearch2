@@ -53,7 +53,7 @@ def _reconstruct_packed_kernel(
     tl.store(out + elem_offsets, v, mask=elem_offsets < N)
 
 
-def reconstruct_bitmask(vals, packed_mask, shape, block=2048):
+def reconstruct_bitmask(vals, packed_mask, shape, block=16384):
     """
     vals: 1D CUDA tensor containing nonzero / filled values
     packed_mask: 1D CUDA uint8 tensor, 8 mask bits per byte
