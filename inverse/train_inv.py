@@ -32,33 +32,20 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
 
 @triton.jit
-def _vals_kernel(dense_ptr, block_prefix_ptr, packed_mask_ptr,
-                 vals_out, N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
+def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
+                 N: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
-    byte_offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
-    byte_valid = byte_offs * 8 < N
+    elem_offs = pid * BLOCK + tl.arange(0, BLOCK)
+    elem_valid = elem_offs < N
 
-    byte_val = tl.load(packed_mask_ptr + byte_offs, mask=byte_valid,
-                       other=0).to(tl.int32)
+    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0)
+    nz = (x != 0).to(tl.int32)
 
-    x = byte_val
-    x = (x & 0x55) + ((x >> 1) & 0x55)
-    x = (x & 0x33) + ((x >> 2) & 0x33)
-    x = (x & 0x0F) + ((x >> 4) & 0x0F)
-    byte_nz = x
-
-    byte_base = tl.cumsum(byte_nz, 0) - byte_nz
+    byte_pos = tl.cumsum(nz, 0) - nz
     global_base = tl.load(block_prefix_ptr + pid)
+    val_idx = global_base + byte_pos
 
-    byte_pos = tl.zeros([BYTE_BLOCK], dtype=tl.int32)
-    for b in tl.static_range(8):
-        elem_offs = byte_offs * 8 + b
-        in_bounds = (elem_offs < N) & byte_valid
-        x = tl.load(dense_ptr + elem_offs, mask=in_bounds, other=0.0)
-        nz = ((byte_val >> b) & 1).to(tl.int1)
-        val_idx = global_base + byte_base + byte_pos
-        tl.store(vals_out + val_idx, x, mask=in_bounds & nz)
-        byte_pos += nz.to(tl.int32)
+    tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
 def compress_dense(dense, shape, block=512):
@@ -92,8 +79,8 @@ def compress_dense(dense, shape, block=512):
     vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
-        flat, block_prefix, packed_mask, vals,
-        N=N, BYTE_BLOCK=block // 8,
+        flat, block_prefix, vals,
+        N=N, BLOCK=block,
     )
 
     return vals, packed_mask
