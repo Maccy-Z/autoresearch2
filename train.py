@@ -22,22 +22,47 @@ def _compute_block_counts_kernel(packed_mask, block_counts,
 
 
 @triton.jit
-def _reconstruct_packed_kernel(vals, packed_mask, block_prefix, out,
-                               N: tl.constexpr, BLOCK: tl.constexpr):
+def _reconstruct_packed_kernel(
+    vals, packed_mask, block_prefix, out,
+    N: tl.constexpr,
+    BLOCK_BYTES: tl.constexpr,   # number of packed mask bytes per program
+):
     pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
 
-    byte_idx = offs // 8
-    bit_idx = offs % 8
+    byte_offsets = pid * BLOCK_BYTES + tl.arange(0, BLOCK_BYTES)
+    bytes_ = tl.load(
+        packed_mask + byte_offsets,
+        mask=byte_offsets * 8 < N,
+        other=0
+    ).to(tl.int32)
 
-    byte = tl.load(packed_mask + byte_idx, mask=offs < N, other=0).to(tl.int32)
-    m = ((byte >> bit_idx) & 1).to(tl.int32)
+    bit_offsets = tl.arange(0, 8)
+    bits = ((bytes_[:, None] >> bit_offsets[None, :]) & 1).to(tl.int32)
 
-    local_idx = tl.cumsum(m, 0) - 1
+    elem_offsets = byte_offsets[:, None] * 8 + bit_offsets[None, :]
+    valid = elem_offsets < N
+
+    m = bits & valid.to(tl.int32)
+
+    flat_m = tl.reshape(m, [BLOCK_BYTES * 8])
+    flat_offsets = tl.reshape(elem_offsets, [BLOCK_BYTES * 8])
+
+    local_idx = tl.cumsum(flat_m, 0) - 1
     base = tl.load(block_prefix + pid)
 
-    v = tl.load(vals + base + local_idx, mask=(offs < N) & (m == 1), other=0.0)
-    tl.store(out + offs, tl.where(m == 1, v, 0.0), mask=offs < N)
+    active = flat_m == 1
+
+    v = tl.load(
+        vals + base + local_idx,
+        mask=active,
+        other=0.0
+    )
+
+    tl.store(
+        out + flat_offsets,
+        tl.where(active, v, 0.0),
+        mask=valid.reshape([BLOCK_BYTES * 8])
+    )
 
 
 def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
@@ -68,9 +93,9 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
         packed_mask,
         block_prefix,
         out,
+
         N=N,
-        BLOCK=block,
-        num_warps=8,
+        BLOCK_BYTES=1024
     )
 
     return out.reshape(shape)
