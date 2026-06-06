@@ -70,6 +70,7 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=1024):
         out,
         N=N,
         BLOCK=block,
+        num_warps=4,
     )
 
     return out.reshape(shape)
