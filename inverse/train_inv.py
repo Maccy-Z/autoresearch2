@@ -69,12 +69,11 @@ def compress_dense(dense, shape, block=512):
     packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
     _count_pack_kernel[(n_blocks,)](
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
+        num_warps=4,
     )
 
-    block_prefix = torch.cat([
-        torch.zeros(1, device=dense.device, dtype=torch.int64),
-        torch.cumsum(block_counts, dim=0)[:-1].to(torch.int64),
-    ])
+    block_prefix = torch.zeros(n_blocks, device=dense.device, dtype=torch.int64)
+    torch.cumsum(block_counts[:-1], dim=0, out=block_prefix[1:])
 
     total_count = block_prefix[-1] + block_counts[-1]
     vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
