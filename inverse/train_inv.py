@@ -15,17 +15,18 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
     byte_offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
     byte_valid = byte_offs * 8 < N
 
-    byte_val = tl.zeros([BYTE_BLOCK], dtype=tl.int32)
-    byte_nz = tl.zeros([BYTE_BLOCK], dtype=tl.int32)
-    for b in tl.static_range(8):
-        elem_offs = byte_offs * 8 + b
-        in_bounds = (elem_offs < N) & byte_valid
-        x = tl.load(dense_ptr + elem_offs, mask=in_bounds, other=0.0)
-        nz = (x != 0).to(tl.int32)
-        byte_nz += nz
-        byte_val += nz << b
+    byte_offs_2d = byte_offs[:, None]
+    bit_offs_2d = tl.arange(0, 8)[None, :]
 
-    block_count = tl.sum(byte_nz.to(tl.int64), 0)
+    elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
+    in_bounds_2d = elem_offs_2d < N
+    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
+    nz_2d = (x_2d != 0).to(tl.int32)
+
+    byte_nz = tl.sum(nz_2d, 1)
+    byte_val = tl.sum(nz_2d << bit_offs_2d, 1)
+
+    block_count = tl.sum(byte_nz, 0)
     tl.store(block_counts_ptr + pid, block_count)
     tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
              mask=byte_valid)
