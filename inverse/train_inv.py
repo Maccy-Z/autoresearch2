@@ -20,8 +20,7 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
     elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
     in_bounds_2d = elem_offs_2d < N
-    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0,
-                   eviction_policy="evict_first")
+    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
     nz_2d = (x_2d != 0).to(tl.int32)
 
     byte_nz = tl.sum(nz_2d, 1)
