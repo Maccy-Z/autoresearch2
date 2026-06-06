@@ -25,44 +25,32 @@ def _compute_block_counts_kernel(packed_mask, block_counts,
 def _reconstruct_packed_kernel(
     vals, packed_mask, block_prefix, out,
     N: tl.constexpr,
-    BLOCK_BYTES: tl.constexpr,   # number of packed mask bytes per program
+    BLOCK_BYTES: tl.constexpr,
 ):
     pid = tl.program_id(0)
 
     byte_offsets = pid * BLOCK_BYTES + tl.arange(0, BLOCK_BYTES)
-    bytes_ = tl.load(
-        packed_mask + byte_offsets,
-        mask=byte_offsets * 8 < N,
-        other=0
-    ).to(tl.int32)
+    byte = tl.load(packed_mask + byte_offsets, mask=byte_offsets * 8 < N, other=0).to(tl.int32)
+
+    pop = byte
+    pop = (pop & 0x55) + ((pop >> 1) & 0x55)
+    pop = (pop & 0x33) + ((pop >> 2) & 0x33)
+    pop = (pop & 0x0F) + ((pop >> 4) & 0x0F)
+
+    pop_prefix = tl.cumsum(pop, 0)
+    base = tl.load(block_prefix + pid)
+    vals_off = base + pop_prefix - pop
 
     bit_offsets = tl.arange(0, 8)
-    bits = ((bytes_[:, None] >> bit_offsets[None, :]) & 1).to(tl.int32)
-
+    bits = ((byte[:, None] >> bit_offsets[None, :]) & 1).to(tl.int32)
     elem_offsets = byte_offsets[:, None] * 8 + bit_offsets[None, :]
-    valid = elem_offsets < N
 
-    m = bits & valid.to(tl.int32)
+    bit_prefix = tl.cumsum(bits, 1) - bits
+    vals_idx = vals_off[:, None] + bit_prefix
 
-    flat_m = tl.reshape(m, [BLOCK_BYTES * 8])
-    flat_offsets = tl.reshape(elem_offsets, [BLOCK_BYTES * 8])
-
-    local_idx = tl.cumsum(flat_m, 0) - 1
-    base = tl.load(block_prefix + pid)
-
-    active = flat_m == 1
-
-    v = tl.load(
-        vals + base + local_idx,
-        mask=active,
-        other=0.0
-    )
-
-    tl.store(
-        out + flat_offsets,
-        tl.where(active, v, 0.0),
-        mask=valid.reshape([BLOCK_BYTES * 8])
-    )
+    mask = (elem_offsets < N) & (bits == 1)
+    v = tl.load(vals + vals_idx, mask=mask, other=0.0)
+    tl.store(out + elem_offsets, v, mask=elem_offsets < N)
 
 
 def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
