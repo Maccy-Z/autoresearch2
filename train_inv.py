@@ -80,7 +80,7 @@ def compress_dense(dense, shape, block=1024):
     packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
     _fused_compress_kernel[(n_blocks,)](
         flat, block_prefix, vals, packed_mask,
-        N=N, BYTE_BLOCK=block // 8, num_warps=4,
+        N=N, BYTE_BLOCK=block // 8, num_warps=8,
     )
 
     return vals, packed_mask
