@@ -45,16 +45,6 @@ def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
     tl.store(mask_dense + offs, is_nz.to(tl.uint8), mask=valid)
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-    ],
-    key=['N'],
-    warmup=5,
-    rep=1,
-)
 @triton.jit
 def _pack_mask_kernel(mask_dense, packed_mask_out,
                       N: tl.constexpr, BLOCK: tl.constexpr):
