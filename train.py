@@ -22,38 +22,25 @@ def _compute_block_counts_kernel(packed_mask, block_counts,
 
 
 @triton.jit
-def _reconstruct_packed_kernel(
-    vals, packed_mask, block_prefix, out,
-    N: tl.constexpr,
-    BLOCK_BYTES: tl.constexpr,
-):
+def _reconstruct_packed_kernel(vals, packed_mask, block_prefix, out,
+                               N: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
 
-    byte_offsets = pid * BLOCK_BYTES + tl.arange(0, BLOCK_BYTES)
-    byte = tl.load(packed_mask + byte_offsets, mask=byte_offsets * 8 < N, other=0).to(tl.int32)
+    byte_idx = offs // 8
+    bit_idx = offs % 8
 
-    pop = byte
-    pop = (pop & 0x55) + ((pop >> 1) & 0x55)
-    pop = (pop & 0x33) + ((pop >> 2) & 0x33)
-    pop = (pop & 0x0F) + ((pop >> 4) & 0x0F)
+    byte = tl.load(packed_mask + byte_idx, mask=offs < N, other=0).to(tl.int32)
+    m = ((byte >> bit_idx) & 1).to(tl.int32)
 
-    pop_prefix = tl.cumsum(pop, 0)
+    local_idx = tl.cumsum(m, 0) - 1
     base = tl.load(block_prefix + pid)
-    vals_off = base + pop_prefix - pop
 
-    bit_offsets = tl.arange(0, 8)
-    bits = ((byte[:, None] >> bit_offsets[None, :]) & 1).to(tl.int32)
-    elem_offsets = byte_offsets[:, None] * 8 + bit_offsets[None, :]
-
-    bit_prefix = tl.cumsum(bits, 1) - bits
-    vals_idx = vals_off[:, None] + bit_prefix
-
-    mask = (elem_offsets < N) & (bits == 1)
-    v = tl.load(vals + vals_idx, mask=mask, other=0.0)
-    tl.store(out + elem_offsets, v, mask=elem_offsets < N)
+    v = tl.load(vals + base + local_idx, mask=(offs < N) & (m == 1), other=0.0)
+    tl.store(out + offs, tl.where(m == 1, v, 0.0), mask=offs < N)
 
 
-def reconstruct_bitmask(vals, packed_mask, shape, block=32768):
+def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
     """
     vals: 1D CUDA tensor containing nonzero / filled values
     packed_mask: 1D CUDA uint8 tensor, 8 mask bits per byte
@@ -81,9 +68,9 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=32768):
         packed_mask,
         block_prefix,
         out,
-
         N=N,
-        BLOCK_BYTES=triton.cdiv(block, 8),
+        BLOCK=block,
+        num_warps=8,
     )
 
     return out.reshape(shape)
