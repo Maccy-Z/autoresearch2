@@ -50,7 +50,7 @@ def _fused_compress_kernel(dense_ptr, block_prefix_ptr, vals_out,
              mask=byte_valid)
 
 
-def compress_dense(dense, shape, block=512):
+def compress_dense(dense, shape, block=1024):
     """
     dense: 2D dense CUDA tensor
     shape: (rows, cols)
