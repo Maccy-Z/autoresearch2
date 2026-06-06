@@ -25,6 +25,15 @@ def _compute_block_counts_kernel(packed_mask, block_counts,
 
 
 @triton.jit
+def _prefix_sum_kernel(block_counts, block_prefix,
+                       n_blocks: tl.constexpr, BLOCK_SCAN: tl.constexpr):
+    offs = tl.arange(0, BLOCK_SCAN)
+    counts = tl.load(block_counts + offs, mask=offs < n_blocks, other=0)
+    prefix = tl.cumsum(counts, 0) - counts
+    tl.store(block_prefix + offs, prefix, mask=offs < n_blocks)
+
+
+@triton.jit
 def _reconstruct_packed_kernel(vals, packed_mask, block_prefix, out,
                                N: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
@@ -59,10 +68,11 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
     _compute_block_counts_kernel[(n_blocks,)](
         packed_mask, block_counts, N=N, BYTE_BLOCK=triton.cdiv(block, 8),
     )
-    block_prefix = torch.cat([
-        torch.zeros(1, device=vals.device, dtype=torch.int64),
-        torch.cumsum(block_counts, dim=0)[:-1].to(torch.int64),
-    ])
+    block_prefix = torch.empty(n_blocks, device=vals.device, dtype=torch.int64)
+    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
+    _prefix_sum_kernel[(1,)](
+        block_counts, block_prefix, n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
+    )
 
     out = torch.empty(N, device=vals.device, dtype=vals.dtype)
 
