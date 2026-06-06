@@ -5,13 +5,6 @@ import triton.language as tl
 from prepare_inv import evaluate_kernel
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-    ],
-    key=['N'],
-)
 @triton.jit
 def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
                           N: tl.constexpr, BLOCK: tl.constexpr):
@@ -24,15 +17,15 @@ def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2),
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=2, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=2),
         triton.Config({}, num_warps=8, num_stages=2),
     ],
     key=['N'],
+    reset_to_zero=['vals_out', 'mask_dense'],
+    warmup=5,
+    rep=1,
 )
 @triton.jit
 def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
@@ -59,6 +52,8 @@ def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
         triton.Config({}, num_warps=8),
     ],
     key=['N'],
+    warmup=5,
+    rep=1,
 )
 @triton.jit
 def _pack_mask_kernel(mask_dense, packed_mask_out,
