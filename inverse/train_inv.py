@@ -49,7 +49,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def compress_dense(dense, shape, block=512):
+def compress_dense(dense, shape, block=2048):
     """
     dense: 2D dense CUDA tensor
     shape: (rows, cols)
