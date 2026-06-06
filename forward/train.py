@@ -84,6 +84,7 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
         N=N,
         BLOCK=block,
         num_warps=8,
+        num_stages=2,
     )
 
     return out.reshape(shape)
