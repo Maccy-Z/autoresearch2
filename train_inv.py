@@ -26,6 +26,7 @@ def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
     key=['N'],
     warmup=25,
     rep=3,
+    cache_results=True,
 )
 @triton.jit
 def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
