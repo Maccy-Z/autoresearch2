@@ -80,13 +80,13 @@ def compress_dense(dense, shape, block=1024):
     mask_dense = torch.empty(N, device=dense.device, dtype=torch.uint8)
 
     _compress_kernel[(n_blocks,)](
-        flat, block_prefix, vals, mask_dense, N=N, BLOCK=block, num_warps=8,
+        flat, block_prefix, vals, mask_dense, N=N, BLOCK=block,
     )
 
     packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
     n_pack_blocks = triton.cdiv(n_bytes, block // 8)
     _pack_mask_kernel[(n_pack_blocks,)](
-        mask_dense, packed_mask, N=N, BLOCK=block // 8, num_warps=8,
+        mask_dense, packed_mask, N=N, BLOCK=block // 8,
     )
 
     return vals, packed_mask
