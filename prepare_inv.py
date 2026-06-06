@@ -60,7 +60,7 @@ def evaluate_kernel(compress_dense):
     for dense, shape, expected_vals, expected_mask in dataloader():
         vals, packed_mask = None, None
         # Initial warmup:
-        for _ in range(5):
+        for _ in range(100):
             vals, packed_mask = compress_dense(dense, shape)
 
         # Time main run
