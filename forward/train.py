@@ -64,11 +64,11 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=8192):
     N = shape[0] * shape[1]
     n_blocks = triton.cdiv(N, block)
 
-    block_counts = torch.empty(n_blocks, device=vals.device, dtype=torch.int64)
+    block_counts = torch.empty(n_blocks, device=vals.device, dtype=torch.int32)
     _compute_block_counts_kernel[(n_blocks,)](
         packed_mask, block_counts, N=N, BYTE_BLOCK=triton.cdiv(block, 8),
     )
-    block_prefix = torch.empty(n_blocks, device=vals.device, dtype=torch.int64)
+    block_prefix = torch.empty(n_blocks, device=vals.device, dtype=torch.int32)
     BLOCK_SCAN = triton.next_power_of_2(n_blocks)
     _prefix_sum_kernel[(1,)](
         block_counts, block_prefix, n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
