@@ -20,7 +20,8 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
     elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
     in_bounds_2d = elem_offs_2d < N
-    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
+    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0,
+                   eviction_policy="evict_first")
     nz_2d = (x_2d != 0).to(tl.int32)
 
     byte_nz = tl.sum(nz_2d, 1)
@@ -33,13 +34,26 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
 
 @triton.jit
+def _prefix_total_kernel(block_counts, block_prefix, total_count,
+                         n_blocks: tl.constexpr, BLOCK_SCAN: tl.constexpr):
+    offs = tl.arange(0, BLOCK_SCAN)
+    counts = tl.load(block_counts + offs, mask=offs < n_blocks, other=0)
+    total = tl.sum(counts, 0)
+    prefix = tl.cumsum(counts, 0) - counts
+    tl.store(block_prefix + offs, prefix, mask=offs < n_blocks)
+    tl.store(total_count, total)
+
+
+@triton.jit
 def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
                  N: tl.constexpr, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     elem_offs = pid * BLOCK + tl.arange(0, BLOCK)
+    elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
     elem_valid = elem_offs < N
 
-    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0)
+    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0,
+                eviction_policy="evict_first")
     nz = (x != 0).to(tl.int32)
 
     byte_pos = tl.cumsum(nz, 0) - nz
@@ -64,7 +78,7 @@ def compress_dense(dense, shape, block=2048):
     n_bytes = triton.cdiv(N, 8)
     n_blocks = triton.cdiv(N, block)
 
-    block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int64)
+    block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
 
     packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
     _count_pack_kernel[(n_blocks,)](
@@ -72,10 +86,14 @@ def compress_dense(dense, shape, block=2048):
         num_warps=4,
     )
 
-    block_prefix = torch.zeros(n_blocks, device=dense.device, dtype=torch.int64)
-    torch.cumsum(block_counts[:-1], dim=0, out=block_prefix[1:])
+    block_prefix = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
+    total_count = torch.empty(1, device=dense.device, dtype=torch.int32)
+    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
+    _prefix_total_kernel[(1,)](
+        block_counts, block_prefix, total_count,
+        n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
+    )
 
-    total_count = block_prefix[-1] + block_counts[-1]
     vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
