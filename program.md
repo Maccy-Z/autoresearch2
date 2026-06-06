@@ -104,7 +104,7 @@ LOOP FOREVER:
 4. Run the experiment: `python3 {task}/train*.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context; replace `{task}` and the wildcard with the actual filenames)
 5. Read out the results: Check that "passed" appears (correctness). Then get the total: `grep "^Total time:" run.log`. The rest of the log may be useful.
 6. If the output is missing "passed" or errors appear, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv (`results_{task}.tsv`) — NOTE: do not commit the results.tsv file, leave it untracked by git.
+7. Record the results in the tsv (`results_{task}.tsv`). Commit all results, including suboptimal results. — NOTE: do not commit the results.tsv file, leave it untracked by git.
 8. If Total time improved (lower), you "advance" the branch, keeping the git commit.
 9. If Total time is equal or worse, you git reset back to where you started.
 
@@ -117,15 +117,3 @@ The idea is that you are a completely autonomous researcher trying things out. I
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read Triton documentation, re-read the in-scope files for new angles, try combining previous near-misses, try more radical kernel redesigns. The loop runs until the human interrupts you, period.
 
 As an example use case, a user might leave you running while they sleep. The user then wakes up to experimental results, all completed by you while they slept!
-
-## Optimization Ideas for Triton Kernels
-
-Here are some directions worth exploring:
-
-- **Block size tuning**: Try different `BLOCK` values (128, 512, 1024) — tradeoff between parallelism and register pressure.
-- **Triton prefix-sum kernel**: Replace the PyTorch-side prefix computation with a GPU-side Triton kernel to avoid the host-device round trip.
-- **Fused kernel**: Combine multiple steps (e.g., bit-unpacking and prefix-sum) into a single Triton kernel (currently done partially in Python/PyTorch).
-- **Memory coalescing**: Adjust access patterns to maximize memory bandwidth utilization.
-- **Grid strategy**: Use 2D grids, multiple program IDs, or different work distribution.
-- **Auto-tuning**: Use `@triton.autotune` to search for optimal configurations automatically. This may not be available in all environments — check first.
-- **Pipeline optimization**: Use `tl.async_copy` or other Triton features to overlap compute and memory.
