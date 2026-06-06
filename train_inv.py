@@ -58,7 +58,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, packed_mask_ptr,
         byte_pos += nz.to(tl.int32)
 
 
-def compress_dense(dense, shape, block=1024):
+def compress_dense(dense, shape, block=512):
     """
     dense: 2D dense CUDA tensor
     shape: (rows, cols)
