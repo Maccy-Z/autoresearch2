@@ -51,7 +51,7 @@ def _pack_mask_kernel(mask_dense, packed_mask_out,
     tl.store(packed_mask_out + offs, byte_val.to(tl.uint8), mask=byte_mask)
 
 
-def compress_dense(dense, shape, block=2048):
+def compress_dense(dense, shape, block=512):
     """
     dense: 2D dense CUDA tensor
     shape: (rows, cols)
