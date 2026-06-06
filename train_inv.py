@@ -15,18 +15,6 @@ def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
     tl.store(block_counts_ptr + pid, count)
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=2),
-    ],
-    key=['N'],
-    reset_to_zero=['vals_out', 'mask_dense'],
-    warmup=5,
-    rep=1,
-)
 @triton.jit
 def _compress_kernel(dense_ptr, block_prefix_ptr, vals_out, mask_dense,
                      N: tl.constexpr, BLOCK: tl.constexpr):
