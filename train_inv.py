@@ -6,19 +6,8 @@ from prepare_inv import evaluate_kernel
 
 
 @triton.jit
-def _count_nonzero_kernel(dense_ptr, block_counts_ptr,
-                          N: tl.constexpr, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    x = tl.load(dense_ptr + offs, mask=offs < N, other=0.0)
-    count = tl.sum((x != 0).to(tl.int64), 0)
-    tl.store(block_counts_ptr + pid, count)
-
-
-@triton.jit
-def _fused_compress_kernel(dense_ptr, block_prefix_ptr, vals_out,
-                           packed_mask_out,
-                           N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
+def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
+                       N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     byte_offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
     byte_valid = byte_offs * 8 < N
@@ -33,6 +22,28 @@ def _fused_compress_kernel(dense_ptr, block_prefix_ptr, vals_out,
         byte_nz += nz
         byte_val += nz << b
 
+    block_count = tl.sum(byte_nz.to(tl.int64), 0)
+    tl.store(block_counts_ptr + pid, block_count)
+    tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
+             mask=byte_valid)
+
+
+@triton.jit
+def _vals_kernel(dense_ptr, block_prefix_ptr, packed_mask_ptr,
+                 vals_out, N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    byte_offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
+    byte_valid = byte_offs * 8 < N
+
+    byte_val = tl.load(packed_mask_ptr + byte_offs, mask=byte_valid,
+                       other=0).to(tl.int32)
+
+    x = byte_val
+    x = (x & 0x55) + ((x >> 1) & 0x55)
+    x = (x & 0x33) + ((x >> 2) & 0x33)
+    x = (x & 0x0F) + ((x >> 4) & 0x0F)
+    byte_nz = x
+
     byte_base = tl.cumsum(byte_nz, 0) - byte_nz
     global_base = tl.load(block_prefix_ptr + pid)
 
@@ -41,13 +52,10 @@ def _fused_compress_kernel(dense_ptr, block_prefix_ptr, vals_out,
         elem_offs = byte_offs * 8 + b
         in_bounds = (elem_offs < N) & byte_valid
         x = tl.load(dense_ptr + elem_offs, mask=in_bounds, other=0.0)
-        nz = (x != 0)
+        nz = ((byte_val >> b) & 1).to(tl.int1)
         val_idx = global_base + byte_base + byte_pos
         tl.store(vals_out + val_idx, x, mask=in_bounds & nz)
         byte_pos += nz.to(tl.int32)
-
-    tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
-             mask=byte_valid)
 
 
 def compress_dense(dense, shape, block=1024):
@@ -66,9 +74,12 @@ def compress_dense(dense, shape, block=1024):
     n_blocks = triton.cdiv(N, block)
 
     block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int64)
-    _count_nonzero_kernel[(n_blocks,)](
-        flat, block_counts, N=N, BLOCK=block,
+
+    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
+    _count_pack_kernel[(n_blocks,)](
+        flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
     )
+
     block_prefix = torch.cat([
         torch.zeros(1, device=dense.device, dtype=torch.int64),
         torch.cumsum(block_counts, dim=0)[:-1].to(torch.int64),
@@ -77,10 +88,9 @@ def compress_dense(dense, shape, block=1024):
     total_count = block_prefix[-1] + block_counts[-1]
     vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
 
-    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
-    _fused_compress_kernel[(n_blocks,)](
-        flat, block_prefix, vals, packed_mask,
-        N=N, BYTE_BLOCK=block // 8, num_warps=8,
+    _vals_kernel[(n_blocks,)](
+        flat, block_prefix, packed_mask, vals,
+        N=N, BYTE_BLOCK=block // 8,
     )
 
     return vals, packed_mask
