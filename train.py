@@ -6,17 +6,19 @@ from prepare import evaluate_kernel
 
 @triton.jit
 def _compute_block_counts_kernel(packed_mask, block_counts,
-                                  N: tl.constexpr, BLOCK: tl.constexpr):
+                                  N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
     pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
+    n_bytes = tl.cdiv(N, 8)
 
-    byte_idx = offs // 8
-    bit_idx = offs % 8
+    byte = tl.load(packed_mask + offs, mask=offs < n_bytes, other=0).to(tl.int32)
 
-    byte = tl.load(packed_mask + byte_idx, mask=offs < N, other=0).to(tl.int32)
-    m = (byte >> bit_idx) & 1
-    count = tl.sum(m, 0)
-    tl.store(block_counts + pid, count)
+    count = tl.zeros([BYTE_BLOCK], dtype=tl.int32)
+    for b in range(8):
+        count += (byte >> b) & 1
+
+    total = tl.sum(count, 0)
+    tl.store(block_counts + pid, total)
 
 
 @triton.jit
@@ -52,7 +54,7 @@ def reconstruct_bitmask(vals, packed_mask, shape, block=1024):
 
     block_counts = torch.empty(n_blocks, device=vals.device, dtype=torch.int64)
     _compute_block_counts_kernel[(n_blocks,)](
-        packed_mask, block_counts, N=N, BLOCK=block,
+        packed_mask, block_counts, N=N, BYTE_BLOCK=triton.cdiv(block, 8),
     )
     block_prefix = torch.cat([
         torch.zeros(1, device=vals.device, dtype=torch.int64),
