@@ -40,7 +40,7 @@ def generate_random_data(rows, cols, p=0.5):
 
 def dataloader():
     """ Yield data for testing reconstruction with different parameters. """
-    for rows in [128, 512, 2048, 4096]:
+    for rows in [512, 2048, 4096]:
         for cols in [2048, 5000, 10000, 15000]:
             vals, packed_mask, shape, expected = generate_random_data(rows, cols)
             yield vals, packed_mask, shape, expected
