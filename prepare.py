@@ -59,7 +59,7 @@ def evaluate_kernel(reconstruct_bitmask):
         # Time main run
         torch.cuda.synchronize()
         start = time.perf_counter()
-        for _ in range(200):
+        for _ in range(2000):
             out = reconstruct_bitmask(vals, packed_mask, shape)
         torch.cuda.synchronize()
         end = time.perf_counter()
