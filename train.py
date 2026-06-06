@@ -13,11 +13,11 @@ def _compute_block_counts_kernel(packed_mask, block_counts,
 
     byte = tl.load(packed_mask + offs, mask=offs < n_bytes, other=0).to(tl.int32)
 
-    count = tl.zeros([BYTE_BLOCK], dtype=tl.int32)
-    for b in range(8):
-        count += (byte >> b) & 1
-
-    total = tl.sum(count, 0)
+    x = byte
+    x = (x & 0x55) + ((x >> 1) & 0x55)
+    x = (x & 0x33) + ((x >> 2) & 0x33)
+    x = (x & 0x0F) + ((x >> 4) & 0x0F)
+    total = tl.sum(x, 0)
     tl.store(block_counts + pid, total)
 
 
