@@ -20,8 +20,7 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
     elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
     in_bounds_2d = elem_offs_2d < N
-    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0,
-                   eviction_policy="evict_last")
+    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
     nz_2d = (x_2d != 0).to(tl.int32)
 
     byte_nz = tl.sum(nz_2d, 1)
@@ -63,7 +62,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-_state_cache = {}
+_buffer_cache = {}
 
 
 def compress_dense(dense, shape, block=2048):
@@ -81,58 +80,44 @@ def compress_dense(dense, shape, block=2048):
     n_bytes = triton.cdiv(N, 8)
     n_blocks = triton.cdiv(N, block)
 
-    key = (shape, block, dense.data_ptr())
-    state = _state_cache.get(key)
-    if state is None:
-        packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
-        vals = torch.empty(N, device=dense.device, dtype=dense.dtype)
-        block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
-        block_prefix = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
-        total_count = torch.zeros(1, device=dense.device, dtype=torch.int32)
-
-        BLOCK_SCAN = triton.next_power_of_2(n_blocks)
-
-        # Warmup (required for CUDA graph capture)
-        for _ in range(3):
-            _count_pack_kernel[(n_blocks,)](
-                flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
-                num_warps=4, num_stages=2,
-            )
-            _prefix_total_kernel[(1,)](
-                block_counts, block_prefix, total_count,
-                n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
-            )
-            _vals_kernel[(n_blocks,)](
-                flat, block_prefix, vals, N=N, BLOCK=block, num_stages=2,
-            )
-        torch.cuda.synchronize()
-
-        # Capture CUDA graph
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
-            _count_pack_kernel[(n_blocks,)](
-                flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
-                num_warps=4, num_stages=2,
-            )
-            _prefix_total_kernel[(1,)](
-                block_counts, block_prefix, total_count,
-                n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
-            )
-            _vals_kernel[(n_blocks,)](
-                flat, block_prefix, vals, N=N, BLOCK=block, num_stages=2,
-            )
-
-        state = {
-            'packed_mask': packed_mask, 'vals': vals,
-            'block_counts': block_counts, 'block_prefix': block_prefix,
-            'total_count': total_count, 'graph': g, 'flat': flat,
+    key = (shape, block)
+    bufs = _buffer_cache.get(key)
+    if bufs is None:
+        bufs = {
+            'packed_mask': torch.empty(n_bytes, device=dense.device, dtype=torch.uint8),
+            'vals': torch.empty(N, device=dense.device, dtype=dense.dtype),
+            'block_counts': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
+            'block_prefix': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
+            'total_count': torch.zeros(1, device=dense.device, dtype=torch.int32),
         }
-        _state_cache[key] = state
+        _buffer_cache[key] = bufs
 
-    # Replay the graph
-    state['graph'].replay()
-    tc = state['total_count'].item()
-    return state['vals'][:tc], state['packed_mask']
+    block_counts = bufs['block_counts']
+    packed_mask = bufs['packed_mask']
+    block_prefix = bufs['block_prefix']
+    total_count = bufs['total_count']
+
+    _count_pack_kernel[(n_blocks,)](
+        flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
+        num_warps=4, num_stages=2,
+    )
+
+    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
+    _prefix_total_kernel[(1,)](
+        block_counts, block_prefix, total_count,
+        n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
+    )
+
+    tc = total_count.item()
+    vals = bufs['vals'][:tc]
+
+    _vals_kernel[(n_blocks,)](
+        flat, block_prefix, vals,
+        N=N, BLOCK=block,
+        num_stages=2,
+    )
+
+    return vals, packed_mask
 
 
 if __name__ == "__main__":
