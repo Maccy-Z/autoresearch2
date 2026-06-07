@@ -85,7 +85,6 @@ def compress_dense(dense, shape, block=2048):
     if bufs is None:
         bufs = {
             'packed_mask': torch.empty(n_bytes, device=dense.device, dtype=torch.uint8),
-            'vals': torch.empty(N, device=dense.device, dtype=dense.dtype),
             'block_counts': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
             'block_prefix': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
             'total_count': torch.zeros(1, device=dense.device, dtype=torch.int32),
@@ -109,7 +108,7 @@ def compress_dense(dense, shape, block=2048):
     )
 
     tc = total_count.item()
-    vals = bufs['vals'][:tc]
+    vals = torch.empty(int(tc), device=dense.device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
