@@ -62,6 +62,9 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
+_buffer_cache = {}
+
+
 def compress_dense(dense, shape, block=2048):
     """
     dense: 2D dense CUDA tensor
@@ -77,23 +80,36 @@ def compress_dense(dense, shape, block=2048):
     n_bytes = triton.cdiv(N, 8)
     n_blocks = triton.cdiv(N, block)
 
-    block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
+    key = (shape, block)
+    bufs = _buffer_cache.get(key)
+    if bufs is None:
+        bufs = {
+            'packed_mask': torch.empty(n_bytes, device=dense.device, dtype=torch.uint8),
+            'vals': torch.empty(N, device=dense.device, dtype=dense.dtype),
+            'block_counts': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
+            'block_prefix': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
+            'total_count': torch.zeros(1, device=dense.device, dtype=torch.int32),
+        }
+        _buffer_cache[key] = bufs
 
-    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
+    block_counts = bufs['block_counts']
+    packed_mask = bufs['packed_mask']
+    block_prefix = bufs['block_prefix']
+    total_count = bufs['total_count']
+
     _count_pack_kernel[(n_blocks,)](
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
         num_warps=4, num_stages=2,
     )
 
-    block_prefix = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
-    total_count = torch.empty(1, device=dense.device, dtype=torch.int32)
     BLOCK_SCAN = triton.next_power_of_2(n_blocks)
     _prefix_total_kernel[(1,)](
         block_counts, block_prefix, total_count,
         n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
     )
 
-    vals = torch.empty(total_count.item(), device=dense.device, dtype=dense.dtype)
+    tc = total_count.item()
+    vals = bufs['vals'][:tc]
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
