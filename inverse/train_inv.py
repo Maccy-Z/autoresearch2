@@ -62,9 +62,6 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-_buffer_cache = {}
-
-
 def compress_dense(dense, shape, block=2048):
     """
     dense: 2D dense CUDA tensor
@@ -72,7 +69,6 @@ def compress_dense(dense, shape, block=2048):
     Returns (vals, packed_mask) where vals are non-zero values in row-major
     order and packed_mask is uint8 bitmask.
     """
-    assert dense.is_cuda
 
     rows, cols = shape
     N = rows * cols
@@ -80,21 +76,10 @@ def compress_dense(dense, shape, block=2048):
     n_bytes = triton.cdiv(N, 8)
     n_blocks = triton.cdiv(N, block)
 
-    key = (shape, block)
-    bufs = _buffer_cache.get(key)
-    if bufs is None:
-        bufs = {
-            'packed_mask': torch.empty(n_bytes, device=dense.device, dtype=torch.uint8),
-            'block_counts': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
-            'block_prefix': torch.empty(n_blocks, device=dense.device, dtype=torch.int32),
-            'total_count': torch.zeros(1, device=dense.device, dtype=torch.int32),
-        }
-        _buffer_cache[key] = bufs
-
-    block_counts = bufs['block_counts']
-    packed_mask = bufs['packed_mask']
-    block_prefix = bufs['block_prefix']
-    total_count = bufs['total_count']
+    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
+    block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
+    block_prefix = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
+    total_count = torch.zeros(1, device=dense.device, dtype=torch.int32)
 
     _count_pack_kernel[(n_blocks,)](
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
@@ -107,8 +92,7 @@ def compress_dense(dense, shape, block=2048):
         n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
     )
 
-    tc = total_count.item()
-    vals = torch.empty(int(tc), device=dense.device, dtype=dense.dtype)
+    vals = torch.empty(total_count, device=dense.device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
