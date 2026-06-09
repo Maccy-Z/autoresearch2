@@ -1,7 +1,7 @@
 import torch
 from torch.autograd import Function
 import torch.nn as nn
-from torch.utils import _pytree as pytree
+from torch import Tensor
 
 from sparse_pack import bitsparse_pack
 from sparse_unpack import bitsparse_unpack
@@ -32,9 +32,6 @@ class BitsparseTensor(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-        if kwargs is None:
-            kwargs = {}
-
         # Convert to dense before doing matmul.
         # x @ y for 2D tensors usually reaches aten.mm.default
         if func is torch.ops.aten.mm.default:
@@ -73,7 +70,6 @@ class LinearReLUFunction(Function):
         ctx.save_for_backward(input, weight, z)
 
         output = BitsparseTensor(output)
-        print(output)
         return output
 
     @staticmethod
@@ -99,68 +95,43 @@ class LinearReLUFunction(Function):
 
 
 class Model(nn.Module):
-    def __init__(self, in_features, out_features, hidden_size=64, num_layers=2, device=None, generator=None):
+    def __init__(self, W1, W2):
         super().__init__()
 
-        # Build the list of (in_features, out_features) for each layer
-        if num_layers == 1:
-            shapes = [(in_features, out_features)]
-        else:
-            shapes = [(in_features, hidden_size)]
-            shapes += [(hidden_size, hidden_size)] * (num_layers - 2)
-            shapes += [(hidden_size, out_features)]
+        self.W1 = torch.nn.Parameter(W1.clone())
+        self.W2 = torch.nn.Parameter(W2.clone())
 
-        weights = []
-        for fan_in, fan_out in shapes:
-            w = nn.Parameter(torch.empty(fan_out, fan_in, device=device))
-            nn.init.kaiming_uniform_(w, a=5 ** 0.5, generator=generator)
-            weights.append(w)
-
-        self.weights = nn.ParameterList(weights)
-
-    def forward(self, input):
-        x = input
-        for i, weight in enumerate(self.weights):
-            if i < len(self.weights) - 1:
-                sparse_in = (i > 0)
-                x = LinearReLUFunction.apply(x, weight, sparse_in)
-            else:
-                print(f"Input to final layer: {x}")
-                # x = x.unpack()
-                x = x @ weight.t()
+    def forward(self, x: Tensor) -> Tensor:
+        x = LinearReLUFunction.apply(x, self.W1, False)
+        x = x @ self.W2.t()
         return x
-
-def trace_grad_fn(fn, depth=0):
-    if fn is None:
-        return
-    print("  " * depth + str(fn))
-    for next_fn, _ in fn.next_functions:
-        trace_grad_fn(next_fn, depth + 1)
 
 
 def main():
+    from standard_solution import generate_parameters, exact_solution
     device = "cuda"
-    dim = 1024
-    bs = 2048
+    dim, expansion = 2048, 4
 
-    gen = torch.Generator(device=device).manual_seed(42)
-    x = torch.randn(bs, dim, requires_grad=True, device=device, generator=gen)
-    model = Model(dim, dim, hidden_size=dim*4, num_layers=2, device=device, generator=gen)
+    W1, W2, x, y = generate_parameters(dim, expansion)
+    exact_y_hat, exact_W1_g, exact_W2_g = exact_solution(W1, W2, x, y)
 
-    y = model(x)
-    loss = y.sum()
+
+    model = Model(W1, W2)
+
+    y_hat = model(x)
+    loss = (y_hat - y).pow(2).mean()
     loss.backward()
-
+    W1_g = model.W1.grad.detach().clone()
+    W2_g = model.W2.grad.detach().clone()
 
     print("-" * 50)
-    # print(y)
-    # trace_grad_fn(y.grad_fn)
-    # exit(4)
-    print(loss)
-    for i, w in enumerate(model.weights):
-        print(f'layer.weights[{i}].grad.shape = {w.grad = }')
+    preds_same = torch.allclose(y_hat, exact_y_hat)
+    W1_grads_same = torch.allclose(W1_g, exact_W1_g)
+    W2_grads_same = torch.allclose(W2_g, exact_W2_g)
 
-    print(f'{x.grad.shape = }')
+    print(f'{preds_same = }')
+    print(f'{W1_grads_same = }')
+    print(f'{W2_grads_same = }')
 
 
 if __name__ == '__main__':
