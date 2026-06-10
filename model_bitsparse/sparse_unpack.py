@@ -62,24 +62,25 @@ def bitsparse_unpack(vals, packed_mask, shape, block=8192) -> torch.Tensor:
     Processed in blocks for parallelism using Triton kernels."""
     assert vals.is_cuda and packed_mask.is_cuda
     assert packed_mask.dtype == torch.uint8
+    device = vals.device
 
     N = shape[0] * shape[1]                       # total number of elements in output
     n_blocks = triton.cdiv(N, block)              # number of element blocks
 
     # Step 1: count how many set bits fall into each block
-    block_counts = torch.empty(n_blocks, device=vals.device, dtype=torch.int32)
+    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
     _compute_block_counts_kernel[(n_blocks,)](
         packed_mask, block_counts, N=N, BYTE_BLOCK=triton.cdiv(block, 8),
     )
 
     # Step 2: exclusive prefix sum → starting offset in vals for each block
-    block_prefix = torch.empty(n_blocks, device=vals.device, dtype=torch.int32)
+    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
     BLOCK_SCAN = triton.next_power_of_2(n_blocks)
     _prefix_sum_kernel[(1,)](
         block_counts, block_prefix, n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
     )
 
-    out = torch.empty(N, device=vals.device, dtype=vals.dtype)
+    out = torch.empty(N, device=device, dtype=vals.dtype)
 
     # Step 3: scatter packed values back to original positions using the prefix offsets
     _reconstruct_packed_kernel[(n_blocks,)](
