@@ -17,6 +17,7 @@ class ModelBase(nn.Module):
         x = F.linear(x, self.W2)
         return x
 
+
 def generate_parameters(dim, expansion, device="cuda"):
     """ Fixed weights and inputs for consistency """
     G = torch.Generator(device=device).manual_seed(1)

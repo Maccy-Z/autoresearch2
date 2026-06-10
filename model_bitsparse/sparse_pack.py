@@ -69,15 +69,17 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
     (vals) and produce a uint8 bitmask (packed_mask, 8 bits per byte).
     Processed in blocks for parallelism using Triton kernels."""
+    device = dense.device
+
     N = dense.numel()                             # total number of elements
     flat = dense.flatten()                        # flatten to 1D for processing
     n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
     n_blocks = triton.cdiv(N, block)              # number of element blocks
 
-    packed_mask = torch.empty(n_bytes, device=dense.device, dtype=torch.uint8)
-    block_counts = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
-    block_prefix = torch.empty(n_blocks, device=dense.device, dtype=torch.int32)
-    total_count = torch.zeros(1, device=dense.device, dtype=torch.int32)
+    packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
+    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
+    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
+    total_count = torch.zeros(1, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
@@ -93,7 +95,7 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     )
 
     # Step 3: compact nonzero values into vals using the prefix offsets
-    vals = torch.empty(total_count, device=dense.device, dtype=dense.dtype)
+    vals = torch.empty(total_count, device=device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
