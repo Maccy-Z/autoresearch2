@@ -110,7 +110,7 @@ def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch
 
 
 def sparse_relu_Ax(W1, x):
-    x = torch.mm(x, W1.t())
+    x = F.linear(x, W1)
     vals, mask = bitsparse_pack(x)
     return vals, mask
 
