@@ -108,9 +108,10 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     return vals, packed_mask
 
 
-def exact_solution(W1, x):
-    """ y = relu(Wx)"""
-
+def sparse_relu_Ax(W1, x):
+    """ Linear layer followed by ReLU, with the output stored in a bitsparse format (vals, mask)
+        where vals are the nonzero values and mask is a uint8 bitmask
+    """
     x = F.linear(x, W1)
     y = F.relu(x)
 
@@ -120,5 +121,5 @@ def exact_solution(W1, x):
 
 
 if __name__ == "__main__":
-    evaluate_kernel(exact_solution)
+    evaluate_kernel(sparse_relu_Ax)
 
