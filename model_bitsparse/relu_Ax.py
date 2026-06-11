@@ -76,11 +76,11 @@ class BitsparseTensor(torch.Tensor):
 
 class LinearReLUFunction(Function):
     @staticmethod
-    def forward(ctx, input, weight, sparse_in=False):
+    def forward(ctx, input, weight, sparse_out=False):
         """
         input:  (batch_size, in_features)
         weight: (out_features, in_features)
-        sparse_in: Input is sparse, needs to be unpacked.
+        sparse_out: Retrun bitsparse tensor
         Forward:    z = input @ W^T,
                     output = relu(z)
         returns:
@@ -93,9 +93,13 @@ class LinearReLUFunction(Function):
 
         z = input_dense @ weight.t()
         output = F.relu(z)
-        output = BitsparseTensor(output)
 
-        ctx.save_for_backward(input, weight, output)
+        if sparse_out:
+            output = BitsparseTensor(output)
+
+            ctx.save_for_backward(input, weight, output)
+        else:
+            ctx.save_for_backward(input, weight, BitsparseTensor(output))
 
         return output
 
@@ -130,6 +134,7 @@ class Model(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = LinearReLUFunction.apply(x, self.W1, False)
+        print(x)
         x = x @ self.W2.t()
         return x
 
@@ -138,7 +143,7 @@ def main():
     from standard_solution import generate_parameters, exact_solution
     dim, expansion = 2048, 4
 
-    W1, W2, x, y = generate_parameters(dim, expansion)
+    W1, W2, x, y = generate_parameters(dim, expansion, 1)
     exact_y_hat, exact_W1_g, exact_W2_g = exact_solution(W1, W2, x, y)
 
 

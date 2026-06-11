@@ -18,9 +18,9 @@ class ModelBase(nn.Module):
         return x
 
 
-def generate_parameters(dim, expansion, device="cuda"):
+def generate_parameters(dim, expansion, seed, device="cuda"):
     """ Fixed weights and inputs for consistency """
-    G = torch.Generator(device=device).manual_seed(1)
+    G = torch.Generator(device=device).manual_seed(seed)
 
     hdim = dim * expansion
     W1 = torch.empty(hdim, dim, device=device)
@@ -49,7 +49,7 @@ def exact_solution(W1, W2, x, y):
 
 def run_base():
     dim, expansion = 2048, 4
-    W1, W2, x, y = generate_parameters(dim, expansion)
+    W1, W2, x, y = generate_parameters(dim, expansion, 1)
     preds, W1_g, W2_g = exact_solution(W1, W2, x, y)
 
     print(preds[0])

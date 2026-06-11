@@ -53,7 +53,7 @@ def evaluate_kernel(reconstruct_bitmask):
     for vals, packed_mask, shape, expected in dataloader():
         out = None
         # Initial warmup:
-        for _ in range(5):
+        for _ in range(100):
             out = reconstruct_bitmask(vals, packed_mask, shape)
 
         # Time main run
