@@ -70,73 +70,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=3),
-        triton.Config({}, num_warps=8, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=4),
-    ],
-    key=['N'],
-)
-@triton.jit
-def _count_pack_kernel_chunked(dense_ptr, block_counts_ptr, packed_mask_out,
-                                N: tl.constexpr, BYTE_BLOCK: tl.constexpr, CHUNKS: tl.constexpr):
-    """Count nonzeros per block and simultaneously pack the per-byte bitmask,
-    processing CHUNKS logical blocks per physical block to reduce launch overhead."""
-    pid = tl.program_id(0)
-    for i in range(CHUNKS):
-        byte_offs = (pid * CHUNKS + i) * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
-        byte_valid = byte_offs * 8 < N
-
-        byte_offs_2d = byte_offs[:, None]
-        bit_offs_2d = tl.arange(0, 8)[None, :]
-
-        elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
-        in_bounds_2d = elem_offs_2d < N
-        x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
-        nz_2d = (x_2d > 0).to(tl.int32)
-
-        byte_nz = tl.sum(nz_2d, 1)
-        byte_val = tl.sum(nz_2d << bit_offs_2d, 1)
-
-        block_count = tl.sum(byte_nz, 0)
-        tl.store(block_counts_ptr + pid * CHUNKS + i, block_count)
-        tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
-                 mask=byte_valid)
-
-
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=3),
-        triton.Config({}, num_warps=8, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=4),
-    ],
-    key=['N'],
-)
-@triton.jit
-def _vals_kernel_chunked(dense_ptr, block_prefix_ptr, vals_out,
-                          N: tl.constexpr, BLOCK: tl.constexpr, CHUNKS: tl.constexpr):
-    """Extract nonzero values, processing CHUNKS logical blocks per physical block."""
-    pid = tl.program_id(0)
-    for i in range(CHUNKS):
-        logical_pid = pid * CHUNKS + i
-        elem_offs = logical_pid * BLOCK + tl.arange(0, BLOCK)
-        elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
-        elem_valid = elem_offs < N
-
-        x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0)
-        nz = (x > 0).to(tl.int32)
-
-        byte_pos = tl.cumsum(nz, 0) - nz
-        global_base = tl.load(block_prefix_ptr + logical_pid)
-        val_idx = global_base + byte_pos
-
-        tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
-
-
-def bitsparse_pack(dense: torch.Tensor, block=None) -> tuple[torch.Tensor, torch.Tensor]:
+def bitsparse_pack(dense: torch.Tensor, block=16384) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
@@ -145,21 +79,6 @@ def bitsparse_pack(dense: torch.Tensor, block=None) -> tuple[torch.Tensor, torch
     device = dense.device
 
     N = dense.numel()                             # total number of elements
-    if block is None:
-        # Use larger blocks for very large tensors to reduce launch overhead
-        if N >= 16_000_000:
-            block = 8192
-        elif N >= 4_000_000:
-            block = 4096
-        else:
-            block = 2048
-    
-    # For large N, chunk the work into fewer physical blocks to reduce launch overhead
-    chunks = 1
-    n_blocks = triton.cdiv(N, block)
-    if n_blocks > 2000:
-        chunks = 4
-        n_blocks = triton.cdiv(n_blocks, chunks)
     flat = dense.flatten()                        # flatten to 1D for processing
     n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
     n_blocks = triton.cdiv(N, block)              # number of element blocks
@@ -169,14 +88,9 @@ def bitsparse_pack(dense: torch.Tensor, block=None) -> tuple[torch.Tensor, torch
     block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
-    if chunks > 1:
-        _count_pack_kernel_chunked[(n_blocks,)](
-            flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8, CHUNKS=chunks,
-        )
-    else:
-        _count_pack_kernel[(n_blocks,)](
-            flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
-        )
+    _count_pack_kernel[(n_blocks,)](
+        flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
+    )
 
     # Step 2: exclusive prefix sum over counts → per-block offsets
     torch.cumsum(block_counts, 0, out=block_prefix)
@@ -186,16 +100,10 @@ def bitsparse_pack(dense: torch.Tensor, block=None) -> tuple[torch.Tensor, torch
     # Preallocate N to avoid CPU sync for total_count; only first total_count entries are written
     vals = torch.empty(N, device=device, dtype=dense.dtype)
 
-    if chunks > 1:
-        _vals_kernel_chunked[(n_blocks,)](
-            flat, block_prefix, vals,
-            N=N, BLOCK=block, CHUNKS=chunks,
-        )
-    else:
-        _vals_kernel[(n_blocks,)](
-            flat, block_prefix, vals,
-            N=N, BLOCK=block,
-        )
+    _vals_kernel[(n_blocks,)](
+        flat, block_prefix, vals,
+        N=N, BLOCK=block,
+    )
 
     return vals, packed_mask
 
