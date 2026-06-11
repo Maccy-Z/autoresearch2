@@ -71,7 +71,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def bitsparse_pack(dense: torch.Tensor, block=512) -> tuple[torch.Tensor, torch.Tensor]:
+def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
@@ -110,8 +110,9 @@ def bitsparse_pack(dense: torch.Tensor, block=512) -> tuple[torch.Tensor, torch.
 
 
 def sparse_relu_Ax(W1, x):
-    x = F.linear(x, W1)
-    vals, mask = bitsparse_pack(x)
+    out = torch.empty(x.shape[0], W1.shape[0], device=x.device, dtype=x.dtype)
+    torch.addmm(out[0], x, W1.t(), beta=0, out=out)
+    vals, mask = bitsparse_pack(out)
     return vals, mask
 
 
