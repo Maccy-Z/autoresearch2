@@ -70,7 +70,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch.Tensor]:
+def bitsparse_pack(dense: torch.Tensor, block=None) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
@@ -79,6 +79,14 @@ def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch
     device = dense.device
 
     N = dense.numel()                             # total number of elements
+    if block is None:
+        # Use larger blocks for very large tensors to reduce launch overhead
+        if N >= 16_000_000:
+            block = 8192
+        elif N >= 4_000_000:
+            block = 4096
+        else:
+            block = 2048
     flat = dense.flatten()                        # flatten to 1D for processing
     n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
     n_blocks = triton.cdiv(N, block)              # number of element blocks
