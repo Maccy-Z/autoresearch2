@@ -30,7 +30,7 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
     elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
     in_bounds_2d = elem_offs_2d < N
     x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
-    nz_2d = (x_2d != 0).to(tl.int32)
+    nz_2d = (x_2d > 0).to(tl.int32)
 
     byte_nz = tl.sum(nz_2d, 1)
     byte_val = tl.sum(nz_2d << bit_offs_2d, 1)
@@ -39,19 +39,6 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
     tl.store(block_counts_ptr + pid, block_count)
     tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
              mask=byte_valid)
-
-
-@triton.jit
-def _prefix_total_kernel(block_counts, block_prefix, total_count,
-                         n_blocks: tl.constexpr, BLOCK_SCAN: tl.constexpr):
-    """Exclusive prefix sum over block_counts plus total sum, yielding both
-    per-block starting offsets and the global number of nonzero values."""
-    offs = tl.arange(0, BLOCK_SCAN)
-    counts = tl.load(block_counts + offs, mask=offs < n_blocks, other=0)
-    total = tl.sum(counts, 0)
-    prefix = tl.cumsum(counts, 0) - counts
-    tl.store(block_prefix + offs, prefix, mask=offs < n_blocks)
-    tl.store(total_count, total)
 
 
 @triton.autotune(
@@ -75,7 +62,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
 
     x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0,
                 eviction_policy="evict_first")
-    nz = (x != 0).to(tl.int32)
+    nz = (x > 0).to(tl.int32)
 
     byte_pos = tl.cumsum(nz, 0) - nz
     global_base = tl.load(block_prefix_ptr + pid)
@@ -84,7 +71,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch.Tensor]:
+def bitsparse_pack(dense: torch.Tensor, block=1024) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
@@ -100,7 +87,6 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
     block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    total_count = torch.zeros(1, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
@@ -108,11 +94,9 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     )
 
     # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
-    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
-    _prefix_total_kernel[(1,)](
-        block_counts, block_prefix, total_count,
-        n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
-    )
+    torch.cumsum(block_counts, 0, out=block_prefix)
+    total_count = block_prefix[-1].clone()
+    block_prefix.sub_(block_counts)
 
     # Step 3: compact nonzero values into vals using the prefix offsets
     vals = torch.empty(total_count, device=device, dtype=dense.dtype)
@@ -126,17 +110,13 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
 
 
 def sparse_relu_Ax(W1, x):
-    """ Linear layer followed by ReLU, with the output stored in a bitsparse format (vals, mask)
-        where vals are the nonzero values and mask is a uint8 bitmask
-    """
     x = F.linear(x, W1)
-    y = F.relu(x)
-
-    vals, mask = bitsparse_pack(y)
-
+    vals, mask = bitsparse_pack(x)
     return vals, mask
 
 
 if __name__ == "__main__":
+    torch.set_float32_matmul_precision("high")
+
     evaluate_kernel(sparse_relu_Ax)
 
