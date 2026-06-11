@@ -67,8 +67,7 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
     elem_valid = elem_offs < N
 
-    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0,
-                eviction_policy="evict_first")
+    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0)
     nz = (x > 0).to(tl.int32)
 
     byte_pos = tl.cumsum(nz, 0) - nz
