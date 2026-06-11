@@ -5,6 +5,16 @@ import triton.language as tl
 
 from prepare import evaluate_kernel
 
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=2, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=3),
+        triton.Config({}, num_warps=8, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=4),
+    ],
+    key=['N'],
+)
 @triton.jit
 def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
                        N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
@@ -44,6 +54,15 @@ def _prefix_total_kernel(block_counts, block_prefix, total_count,
     tl.store(total_count, total)
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=3),
+        triton.Config({}, num_warps=8, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=4),
+    ],
+    key=['N'],
+)
 @triton.jit
 def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
                  N: tl.constexpr, BLOCK: tl.constexpr):
@@ -86,7 +105,6 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
-        num_warps=4, num_stages=2,
     )
 
     # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
@@ -102,7 +120,6 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
         N=N, BLOCK=block,
-        num_stages=2,
     )
 
     return vals, packed_mask
