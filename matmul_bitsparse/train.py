@@ -37,6 +37,7 @@ def _matmul_kernel(A_ptr, B_ptr, C_ptr,
         a_ptrs += BLOCK_K
         b_ptrs += BLOCK_K
 
+    acc = tl.maximum(acc, 0)
     c_ptrs = C_ptr + rm[:, None] * N + rn[None, :]
     tl.store(c_ptrs, acc, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
