@@ -7,9 +7,6 @@ from prepare import evaluate_kernel
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1, num_stages=1),
-        triton.Config({}, num_warps=1, num_stages=2),
-        triton.Config({}, num_warps=2, num_stages=1),
         triton.Config({}, num_warps=2, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=3),
@@ -46,10 +43,6 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1, num_stages=1),
-        triton.Config({}, num_warps=1, num_stages=2),
-        triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=2, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=3),
         triton.Config({}, num_warps=8, num_stages=2),
