@@ -100,7 +100,6 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
     block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
     block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    total_count = torch.zeros(1, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
@@ -108,11 +107,9 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     )
 
     # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
-    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
-    _prefix_total_kernel[(1,)](
-        block_counts, block_prefix, total_count,
-        n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
-    )
+    torch.cumsum(block_counts, 0, out=block_prefix)
+    total_count = block_prefix[-1]
+    block_prefix.sub_(block_counts)
 
     # Step 3: compact nonzero values into vals using the prefix offsets
     vals = torch.empty(total_count, device=device, dtype=dense.dtype)
