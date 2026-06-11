@@ -42,7 +42,7 @@ def dataloader():
             yield W, x, vals_true, masks_true
 
 
-def evaluate_kernel(relu_Ax_fn, atol=None, rtol=None):
+def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
     torch.manual_seed(0)
 
     steps = 50

@@ -1,18 +1,52 @@
 import torch
-import torch.nn.functional as F
 import triton
 import triton.language as tl
-
+import os
+os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 from prepare import evaluate_kernel
+
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=8, num_stages=3),
+    ],
+    key=['M', 'N', 'K'],
+)
+@triton.jit
+def _matmul_kernel(A_ptr, B_ptr, C_ptr,
+                   M, N, K,
+                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    """Compute C = A @ B^T where A is (M,K) row-major and B is (N,K) row-major."""
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+
+    a_ptrs = A_ptr + rm[:, None] * K + rk[None, :]
+    b_ptrs = B_ptr + rn[:, None] * K + rk[None, :]
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_ptrs, mask=(rm[:, None] < M) & (k + rk[None, :] < K), other=0.0)
+        b = tl.load(b_ptrs, mask=(rn[:, None] < N) & (k + rk[None, :] < K), other=0.0)
+        acc += tl.dot(a, tl.trans(b), input_precision="tf32")
+        a_ptrs += BLOCK_K
+        b_ptrs += BLOCK_K
+
+    c_ptrs = C_ptr + rm[:, None] * N + rn[None, :]
+    tl.store(c_ptrs, acc, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
 
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=2, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=3),
-        triton.Config({}, num_warps=8, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=4),
-    ],
+        triton.Config({}, num_warps=8, num_stages=2),    ],
     key=['N'],
 )
 @triton.jit
@@ -43,7 +77,6 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=4, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=3),
         triton.Config({}, num_warps=8, num_stages=2),
         triton.Config({}, num_warps=8, num_stages=4),
@@ -109,13 +142,19 @@ def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch
 
 
 def sparse_relu_Ax(W1, x):
-    x = F.linear(x, W1)
-    vals, mask = bitsparse_pack(x)
+    M, K = x.shape
+    N = W1.shape[0]
+
+    out = torch.empty((M, N), device=x.device, dtype=x.dtype)
+
+    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M']), triton.cdiv(N, meta['BLOCK_N']))
+    _matmul_kernel[grid](x, W1, out, M, N, K)
+
+    vals, mask = bitsparse_pack(out)
     return vals, mask
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("high")
+    # torch.set_float32_matmul_precision("high")
 
     evaluate_kernel(sparse_relu_Ax)
-
