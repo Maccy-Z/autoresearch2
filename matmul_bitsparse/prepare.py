@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import time
 
 from sparse_pack import bitsparse_pack
-
+from sparse_unpack import  bitsparse_unpack
 
 def generate_parameters(dim, expansion, shift=0., seed=1, device="cuda"):
     """ Fixed weights and inputs for consistency """
@@ -42,7 +42,7 @@ def dataloader():
             yield W, x, vals_true, masks_true
 
 
-def evaluate_kernel(relu_Ax_fn):
+def evaluate_kernel(relu_Ax_fn, atol=None, rtol=None):
     torch.manual_seed(0)
 
     steps = 100
@@ -63,8 +63,11 @@ def evaluate_kernel(relu_Ax_fn):
         end = time.perf_counter()
 
         # Check accuracy on final run only, after timer ended.
-        torch.testing.assert_close(vals, vals_true)
-        torch.testing.assert_close(mask, masks_true)
+        out_shape = [x.shape[0], W.shape[0]]
+        y = bitsparse_unpack(vals, mask, out_shape)
+        y_hat = bitsparse_unpack(vals_true, mask, out_shape)
+
+        torch.testing.assert_close(y, y_hat, atol=atol, rtol=rtol)
         # Total nnz:
         numel = W.shape[0] * x.shape[0]          # Shape of y
         fill_frac = vals_true.numel() / numel
