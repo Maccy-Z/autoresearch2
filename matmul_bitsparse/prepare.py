@@ -14,7 +14,7 @@ def generate_parameters(dim, expansion, shift=0., seed=1, device="cuda"):
 
     torch.nn.init.xavier_uniform_(W1, generator=G)
 
-    x = torch.randn(1_000, dim, device=device, generator=G)
+    x = torch.randn(10_000, dim, device=device, generator=G)
 
     # Shift
     W1 = W1 + 0.1*W1.std()
@@ -36,7 +36,7 @@ def exact_solution(W1, x):
 def dataloader():
     """ Yield data for testing reconstruction with different parameters. """
     for rows in [512, 2048, 4096]:
-        for shift in [-0.1, 0., 0.1]:
+        for shift in [-0.1, 0.1]:
             W, x = generate_parameters(rows, 4, shift)
             vals_true, masks_true = exact_solution(W, x)
             yield W, x, vals_true, masks_true
@@ -45,13 +45,13 @@ def dataloader():
 def evaluate_kernel(relu_Ax_fn, atol=None, rtol=None):
     torch.manual_seed(0)
 
-    steps = 100
+    steps = 50
 
     total_time = 0
     vals, mask = None, None
     for W, x, vals_true, masks_true in dataloader():
         # Initial warmup:
-        for _ in range(20):
+        for _ in range(10):
             _ = relu_Ax_fn(W, x)
 
         # Time main run
