@@ -93,13 +93,13 @@ def bitsparse_pack(dense: torch.Tensor, block=1024) -> tuple[torch.Tensor, torch
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
     )
 
-    # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
+    # Step 2: exclusive prefix sum over counts → per-block offsets
     torch.cumsum(block_counts, 0, out=block_prefix)
-    total_count = block_prefix[-1].clone()
     block_prefix.sub_(block_counts)
 
     # Step 3: compact nonzero values into vals using the prefix offsets
-    vals = torch.empty(total_count, device=device, dtype=dense.dtype)
+    # Preallocate N to avoid CPU sync for total_count; only first total_count entries are written
+    vals = torch.empty(N, device=device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
