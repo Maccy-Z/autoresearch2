@@ -70,9 +70,6 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-# Cache for intermediate buffers to avoid repeated allocations
-_pack_buffer_cache = {}
-
 def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
@@ -86,27 +83,22 @@ def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch
     n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
     n_blocks = triton.cdiv(N, block)              # number of element blocks
 
-    cache_key = (n_bytes, n_blocks, device)
-    if cache_key in _pack_buffer_cache:
-        packed_mask, block_counts, block_prefix = _pack_buffer_cache[cache_key]
-    else:
-        packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
-        block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
-        block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
-        _pack_buffer_cache[cache_key] = (packed_mask, block_counts, block_prefix)
+    packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
+    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
+    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
         flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
     )
 
-    # Step 2: exclusive prefix sum over counts → per-block offsets
+    # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
     torch.cumsum(block_counts, 0, out=block_prefix)
+    total_count = block_prefix[-1].clone()
     block_prefix.sub_(block_counts)
 
     # Step 3: compact nonzero values into vals using the prefix offsets
-    # Preallocate N to avoid CPU sync for total_count; only first total_count entries are written
-    vals = torch.empty(N, device=device, dtype=dense.dtype)
+    vals = torch.empty(total_count, device=device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
         flat, block_prefix, vals,
