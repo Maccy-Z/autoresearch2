@@ -65,7 +65,7 @@ def evaluate_kernel(relu_Ax_fn, atol=None, rtol=None):
         # Check accuracy on final run only, after timer ended.
         out_shape = [x.shape[0], W.shape[0]]
         y = bitsparse_unpack(vals, mask, out_shape)
-        y_hat = bitsparse_unpack(vals_true, mask, out_shape)
+        y_hat = bitsparse_unpack(vals_true, masks_true, out_shape)
 
         torch.testing.assert_close(y, y_hat, atol=atol, rtol=rtol)
         # Total nnz:
