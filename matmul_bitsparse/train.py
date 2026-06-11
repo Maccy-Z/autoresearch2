@@ -70,7 +70,10 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def bitsparse_pack(dense: torch.Tensor, block=16384) -> tuple[torch.Tensor, torch.Tensor]:
+# Cache for intermediate buffers to avoid repeated allocations
+_pack_buffer_cache = {}
+
+def bitsparse_pack(dense: torch.Tensor, block=4096) -> tuple[torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
     Given a 2D dense CUDA tensor, extract nonzero values in row-major order
@@ -83,9 +86,14 @@ def bitsparse_pack(dense: torch.Tensor, block=16384) -> tuple[torch.Tensor, torc
     n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
     n_blocks = triton.cdiv(N, block)              # number of element blocks
 
-    packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
-    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
+    cache_key = (n_bytes, n_blocks, device)
+    if cache_key in _pack_buffer_cache:
+        packed_mask, block_counts, block_prefix = _pack_buffer_cache[cache_key]
+    else:
+        packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
+        block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
+        block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
+        _pack_buffer_cache[cache_key] = (packed_mask, block_counts, block_prefix)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
