@@ -81,6 +81,8 @@ def evaluate_kernel(relu_Ax_fn, atol=None, rtol=None):
 
 
 def run_base():
+    torch.set_float32_matmul_precision("high")
+
     evaluate_kernel(exact_solution)
 
 
