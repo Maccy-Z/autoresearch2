@@ -5,7 +5,7 @@ This is an experiment to have the LLM do its own research to improve a Triton ke
 The repo supports **multiple tasks**, each in its own subfolder. Every task has a prepare script (read-only evaluation harness) and a train script (the file you modify, containing the Triton kernel). For example:
 
 - `forward/` — `prepare.py` + `train.py`
-- `inverse/` — `prepare_inv.py` + `train_inv.py`
+- `inverse/` — `prepare.py` + `train.py`
 - `<task>/` — `prepare*.py` + `train*.py` (exact filenames may vary; discover them by listing the folder)
 
 ## Setup
@@ -28,7 +28,7 @@ Once you get confirmation, kick off the experimentation.
 Each experiment runs on a single GPU. You launch it from the repo root as: `python3 {task}/train*.py` (after ensuring the mamba env `optimizer` is active). The train script imports its matching prepare script via a local `sys.path` adjustment, so run it from the repo root — the working directory matters.
 
 **What you CAN do:**
-- Modify `{task}/train*.py` — this is the only file you edit. Almost everything is fair game, just no cheating.
+- Modify `{task}/train*.py` — do not edit prepare.py. Almost everything is fair game, just no cheating.
 - Change Triton kernels — block size, grid strategy, memory access patterns, use of atomics, etc.
 - Change host-side helper functions — different ways to compute block prefixes, different launch parameters, etc.
 - Add new Triton kernels (e.g., a Triton prefix-sum kernel to replace a PyTorch-side computation).
@@ -65,7 +65,7 @@ The key metric is the **Total time** printed at the end. You can extract it dire
 grep "^Total time:" run.log
 ```
 
-NOTE: Lower is better. The total time is the sum of per-shape average times (each averaged over 100 runs).
+NOTE: Lower is better. The total time is the sum of per-shape average times (each averaged over n runs).
 
 ## Logging results
 

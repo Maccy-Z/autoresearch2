@@ -151,6 +151,6 @@ def sparse_relu_Ax(W1, x):
 
 
 if __name__ == "__main__":
-    # torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision("high")
 
     evaluate_kernel(sparse_relu_Ax)

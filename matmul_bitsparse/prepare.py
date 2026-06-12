@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 import time
 
-from sparse_pack import bitsparse_pack
 from sparse_unpack import  bitsparse_unpack
 
 def generate_parameters(dim, expansion, shift=0., seed=1, device="cuda"):
@@ -28,9 +27,7 @@ def exact_solution(W1, x):
     x = F.linear(x, W1)
     y = F.relu(x)
 
-    vals, mask = bitsparse_pack(y)
-
-    return vals, mask
+    return y
 
 
 def dataloader():
@@ -38,8 +35,8 @@ def dataloader():
     for rows in [512, 2048, 4096]:
         for shift in [-0.1, 0.1]:
             W, x = generate_parameters(rows, 4, shift)
-            vals_true, masks_true = exact_solution(W, x)
-            yield W, x, vals_true, masks_true
+            y = exact_solution(W, x)
+            yield W, x, y
 
 
 def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
@@ -49,7 +46,7 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
 
     total_time = 0
     vals, mask = None, None
-    for W, x, vals_true, masks_true in dataloader():
+    for W, x, y_true in dataloader():
         # Initial warmup:
         for _ in range(10):
             _ = relu_Ax_fn(W, x)
@@ -65,12 +62,11 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
         # Check accuracy on final run only, after timer ended.
         out_shape = [x.shape[0], W.shape[0]]
         y = bitsparse_unpack(vals, mask, out_shape)
-        y_hat = bitsparse_unpack(vals_true, masks_true, out_shape)
 
-        torch.testing.assert_close(y, y_hat, atol=atol, rtol=rtol)
+        torch.testing.assert_close(y, y_true, atol=atol, rtol=rtol)
         # Total nnz:
         numel = W.shape[0] * x.shape[0]          # Shape of y
-        fill_frac = vals_true.numel() / numel
+        fill_frac = vals.numel() / numel
 
         time_taken = 1000*(end - start) / steps
         print(f"Shape {W.shape}, fill {fill_frac:.3f}: Time {time_taken:.3g}ms")
@@ -81,9 +77,10 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
 
 
 def run_base():
+    from train import sparse_relu_Ax
     torch.set_float32_matmul_precision("high")
 
-    evaluate_kernel(exact_solution)
+    evaluate_kernel(sparse_relu_Ax)
 
 
 if __name__ == "__main__":
