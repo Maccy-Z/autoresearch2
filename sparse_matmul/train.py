@@ -141,7 +141,7 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
     for k in range(0, K, BLOCK_K):
         a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
         b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
-        acc += tl.dot(a, b, input_precision="tf32")
+        acc += tl.dot(a, b)
         a_base = tl.advance(a_base, (0, BLOCK_K))
         b_base = tl.advance(b_base, (BLOCK_K, 0))
 
