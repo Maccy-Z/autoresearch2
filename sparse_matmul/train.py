@@ -120,24 +120,30 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    rk = tl.arange(0, BLOCK_K)
-
-    a_ptrs = A_ptr + rm[:, None] * K + rk[None, :]
-    b_ptrs = B_ptr + rk[:, None] * N + rn[None, :]
+    a_base = tl.make_block_ptr(
+        base=A_ptr, shape=(M, K), strides=(K, 1),
+        offsets=(pid_m * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_K), order=(0, 1),
+    )
+    b_base = tl.make_block_ptr(
+        base=B_ptr, shape=(K, N), strides=(N, 1),
+        offsets=(0, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0),
+    )
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
-        a = tl.load(a_ptrs, mask=(rm[:, None] < M) & (k + rk[None, :] < K), other=0.0)
-        b = tl.load(b_ptrs, mask=(k + rk[:, None] < K) & (rn[None, :] < N), other=0.0)
+        a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
+        b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
         acc += tl.dot(a, b, input_precision="tf32")
-        a_ptrs += BLOCK_K
-        b_ptrs += BLOCK_K * N
+        a_base = tl.advance(a_base, (0, BLOCK_K))
+        b_base = tl.advance(b_base, (BLOCK_K, 0))
 
     acc = tl.maximum(acc, 0)
-    c_ptrs = C_ptr + rm[:, None] * N + rn[None, :]
-    tl.store(c_ptrs, acc, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
+    c_base = tl.make_block_ptr(
+        base=C_ptr, shape=(M, N), strides=(N, 1),
+        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(0, 1),
+    )
+    tl.store(c_base, acc, boundary_check=(0, 1))
 
 
 _unpack_cache = {}
