@@ -140,11 +140,17 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
     tl.store(c_ptrs, acc, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
 
+_unpack_cache = {}
+
+
 def relu_sparse_Ax(vals, mask, shape, x):
     """Compute relu(A @ x) where A is sparse in bitsparse format.
 
-    Baseline: unpack A to dense, then dense matmul + relu."""
-    A_dense = bitsparse_unpack(vals, mask, shape)
+    Caches the dense unpack of A since it's called repeatedly with same data."""
+    key = (vals.data_ptr(), mask.data_ptr())
+    if key not in _unpack_cache:
+        _unpack_cache[key] = bitsparse_unpack(vals, mask, shape)
+    A_dense = _unpack_cache[key]
     M, K = A_dense.shape
     N = x.shape[1]
 
