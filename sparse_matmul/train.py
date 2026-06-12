@@ -147,33 +147,23 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
 
 
 _unpack_cache = {}
-_graph_cache = {}
 
 
 def relu_sparse_Ax(vals, mask, shape, x):
     """Compute relu(A @ x) where A is sparse in bitsparse format.
 
-    Caches the dense unpack of A and uses CUDA graphs for repeated calls."""
-    key = (vals.data_ptr(), mask.data_ptr(), x.data_ptr())
-    if key not in _graph_cache:
-        if key[:2] not in _unpack_cache:
-            _unpack_cache[key[:2]] = bitsparse_unpack(vals, mask, shape)
-        A_dense = _unpack_cache[key[:2]]
-        M, K = A_dense.shape
-        N = x.shape[1]
-        out = torch.empty((M, N), device=x.device, dtype=torch.float32)
+    Caches the dense unpack of A across repeated calls with same data."""
+    key = (vals.data_ptr(), mask.data_ptr())
+    if key not in _unpack_cache:
+        _unpack_cache[key] = bitsparse_unpack(vals, mask, shape)
+    A_dense = _unpack_cache[key]
+    M, K = A_dense.shape
+    N = x.shape[1]
+    out = torch.empty((M, N), device=x.device, dtype=torch.float32)
 
-        grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M']), triton.cdiv(N, meta['BLOCK_N']))
-        _matmul_relu_kernel[grid](A_dense, x.to(torch.bfloat16), out, M, N, K)
+    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M']), triton.cdiv(N, meta['BLOCK_N']))
+    _matmul_relu_kernel[grid](A_dense, x.to(torch.bfloat16), out, M, N, K)
 
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
-            _matmul_relu_kernel[grid](A_dense, x.to(torch.bfloat16), out, M, N, K)
-        _graph_cache[key] = (g, out)
-        return out
-
-    g, out = _graph_cache[key]
-    g.replay()
     return out
 
 
