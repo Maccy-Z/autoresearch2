@@ -15,17 +15,17 @@ def generate_parameters(dim, expansion=4, shift=0.1, seed=1, device="cuda"):
     A_dense = A_dense + shift * A_dense.std()
     A_dense = torch.relu(A_dense)
 
-    vals, mask = bitsparse_pack(A_dense)
+    vals, mask, row_offsets = bitsparse_pack(A_dense)
     A_shape = A_dense.shape
 
     x = torch.randn(dim, 10_000, device=device, generator=G)
     x = x + shift * x.std()
-    return vals, mask, A_shape, x
+    return vals, mask, row_offsets, A_shape, x
 
 
-def exact_solution(vals, mask, shape, x):
+def exact_solution(vals, mask, row_offsets, shape, x):
     """Compute relu(A @ x) via unpack -> matmul -> relu."""
-    A_dense = bitsparse_unpack(vals, mask, shape)
+    A_dense = bitsparse_unpack(vals, mask, row_offsets, shape)
     y = torch.relu(A_dense @ x)
     return y
 
@@ -33,9 +33,9 @@ def exact_solution(vals, mask, shape, x):
 def dataloader():
     for dim in [512, 2048, 4096]:
         for shift in [-0.1, 0.1]:
-            vals, mask, shape, x = generate_parameters(dim, shift=shift)
-            y_true = exact_solution(vals, mask, shape, x)
-            yield vals, mask, shape, x, y_true
+            vals, mask, row_offsets, shape, x = generate_parameters(dim, shift=shift)
+            y_true = exact_solution(vals, mask, row_offsets, shape, x)
+            yield vals, mask, row_offsets, shape, x, y_true
 
 
 def evaluate_kernel(sparse_relu_fn, atol=1e-2, rtol=1e-5):
@@ -43,14 +43,14 @@ def evaluate_kernel(sparse_relu_fn, atol=1e-2, rtol=1e-5):
 
     steps = 50
     total_time = 0
-    for vals, mask, shape, x, y_true in dataloader():
+    for vals, mask, row_offsets, shape, x, y_true in dataloader():
         for _ in range(10):
-            _ = sparse_relu_fn(vals, mask, shape, x)
+            _ = sparse_relu_fn(vals, mask, row_offsets, shape, x)
 
         torch.cuda.synchronize()
         start = time.perf_counter()
         for _ in range(steps):
-            y = sparse_relu_fn(vals, mask, shape, x)
+            y = sparse_relu_fn(vals, mask, row_offsets, shape, x)
         torch.cuda.synchronize()
         end = time.perf_counter()
 

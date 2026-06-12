@@ -43,10 +43,10 @@ def _prefix_total_kernel(block_counts, block_prefix, total_count,
 
 
 @triton.jit
-def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
-                 N: tl.constexpr, BLOCK: tl.constexpr):
+def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out, row_counts,
+                 N: tl.constexpr, K: tl.constexpr, BLOCK: tl.constexpr):
     """Extract nonzero values from each block and compact them into vals_out
-    using the precomputed prefix offsets."""
+    using the precomputed prefix offsets. Also atomically counts nonzeros per row."""
     pid = tl.program_id(0)
     elem_offs = pid * BLOCK + tl.arange(0, BLOCK)
     elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
@@ -56,6 +56,9 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
                 eviction_policy="evict_first")
     nz = (x != 0).to(tl.int32)
 
+    row = elem_offs // K
+    tl.atomic_add(row_counts + row, nz)
+
     byte_pos = tl.cumsum(nz, 0) - nz
     global_base = tl.load(block_prefix_ptr + pid)
     val_idx = global_base + byte_pos
@@ -63,13 +66,13 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
 
 
-def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch.Tensor]:
+def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pack a dense tensor into a compressed sparse representation.
 
-    Given a 2D dense CUDA tensor, extract nonzero values in row-major order
-    (vals) and produce a uint8 bitmask (packed_mask, 8 bits per byte).
-    Processed in blocks for parallelism using Triton kernels."""
+    Returns (vals, packed_mask, row_offsets) where row_offsets is length (M+1)
+    giving the starting index in vals for each row of the dense matrix."""
     device = dense.device
+    M, K = dense.shape
 
     N = dense.numel()                             # total number of elements
     flat = dense.flatten()                        # flatten to 1D for processing
@@ -80,6 +83,7 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
     block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
     block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
     total_count = torch.zeros(1, device=device, dtype=torch.int32)
+    row_counts = torch.zeros(M, device=device, dtype=torch.int32)
 
     # Step 1: count nonzeros per block and pack the bitmask
     _count_pack_kernel[(n_blocks,)](
@@ -94,13 +98,16 @@ def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch
         n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
     )
 
-    # Step 3: compact nonzero values into vals using the prefix offsets
+    # Step 3: compact nonzero values into vals + count per-row nonzeros
     vals = torch.empty(total_count, device=device, dtype=dense.dtype)
 
     _vals_kernel[(n_blocks,)](
-        flat, block_prefix, vals,
-        N=N, BLOCK=block,
+        flat, block_prefix, vals, row_counts,
+        N=N, K=K, BLOCK=block,
         num_stages=2,
     )
 
-    return vals, packed_mask
+    row_offsets = torch.zeros(M + 1, device=device, dtype=torch.int32)
+    row_offsets[1:] = torch.cumsum(row_counts, 0)
+
+    return vals, packed_mask, row_offsets
