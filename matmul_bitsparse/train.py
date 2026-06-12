@@ -1,14 +1,10 @@
 import torch
 import triton
 import triton.language as tl
-import os
-os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 from prepare import evaluate_kernel
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=4, num_stages=2),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_warps=8, num_stages=3),
     ],
@@ -44,10 +40,9 @@ def _matmul_kernel(A_ptr, B_ptr, C_ptr,
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2, num_stages=2),
         triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=3),
-        triton.Config({}, num_warps=8, num_stages=2),    ],
+        triton.Config({}, num_warps=8, num_stages=2),
+    ],
     key=['N'],
 )
 @triton.jit
@@ -64,8 +59,9 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
     elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
     in_bounds_2d = elem_offs_2d < N
-    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
-    nz_2d = (x_2d > 0).to(tl.int32)
+    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0,
+                   eviction_policy="evict_first")
+    nz_2d = (x_2d != 0).to(tl.int32)
 
     byte_nz = tl.sum(nz_2d, 1)
     byte_val = tl.sum(nz_2d << bit_offs_2d, 1)
@@ -78,9 +74,8 @@ def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=4, num_stages=3),
         triton.Config({}, num_warps=8, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=4),
+        triton.Config({}, num_warps=4, num_stages=3),
     ],
     key=['N'],
 )
@@ -91,10 +86,10 @@ def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
     using the precomputed prefix offsets."""
     pid = tl.program_id(0)
     elem_offs = pid * BLOCK + tl.arange(0, BLOCK)
-    elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
     elem_valid = elem_offs < N
 
-    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0)
+    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0,
+                eviction_policy="evict_first")
     nz = (x > 0).to(tl.int32)
 
     byte_pos = tl.cumsum(nz, 0) - nz
