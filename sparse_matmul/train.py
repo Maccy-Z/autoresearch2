@@ -81,7 +81,7 @@ def bitsparse_unpack(vals, packed_mask, shape, block=65536) -> torch.Tensor:
         block_counts, block_prefix, n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
     )
 
-    out = torch.empty(N, device=device, dtype=torch.float16)
+    out = torch.empty(N, device=device, dtype=torch.bfloat16)
 
     # Step 3: scatter packed values back to original positions using the prefix offsets
     _reconstruct_packed_kernel[(n_blocks,)](
@@ -164,11 +164,11 @@ def relu_sparse_Ax(vals, mask, shape, x):
         out = torch.empty((M, N), device=x.device, dtype=torch.float32)
 
         grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M']), triton.cdiv(N, meta['BLOCK_N']))
-        _matmul_relu_kernel[grid](A_dense, x.half(), out, M, N, K)
+        _matmul_relu_kernel[grid](A_dense, x.to(torch.bfloat16), out, M, N, K)
 
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(g):
-            _matmul_relu_kernel[grid](A_dense, x.half(), out, M, N, K)
+            _matmul_relu_kernel[grid](A_dense, x.to(torch.bfloat16), out, M, N, K)
         _graph_cache[key] = (g, out)
         return out
 
