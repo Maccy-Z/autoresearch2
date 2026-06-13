@@ -1,10 +1,8 @@
-import sys
 import torch
 import triton
 import triton.language as tl
 
-sys.path.insert(0, '.')
-from matmul_bitsparse.sparse_unpack import bitsparse_unpack
+from sparse_unpack import bitsparse_unpack
 from prepare import evaluate_kernel
 
 

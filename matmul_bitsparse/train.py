@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 from prepare import evaluate_kernel
-from tilesparse import _compact_vals_kernel
+from sparse_pack import _compact_vals_kernel
 
 
 @triton.autotune(

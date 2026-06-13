@@ -1,106 +1,146 @@
+"""
+Per-tile compressed sparse format and packing routines.
+
+A dense 2D tensor [M, N] is partitioned into a grid of tiles, each
+[BLOCK_M × BLOCK_N].  Every tile is independently compressed:
+
+  bitmask  — uint8 packed bitmask (8 bits per byte), TILE_BYTES bytes/tile.
+             Row-major within the tile, so bit at flat offset f lives in
+             byte f//8 at bit position f%8.  A set bit (1) means the
+             element is nonzero.
+
+  vals     — a single compact 1D array containing all nonzero values
+             across all tiles, concatenated in grid-major order.
+
+  prefix   — int32 prefix sum of per-tile nonzero counts: prefix[i] is
+             the starting offset of tile i's values inside vals.
+             prefix[num_tiles] equals len(vals).
+
+The (vals, meta) pair returned by dense_to_tilesparse is consumed by
+bitsparse_unpack in matmul_bitsparse/sparse_unpack.py.
+"""
 import torch
 import triton
 import triton.language as tl
 
 
+# ---------------------------------------------------------------------------
+# Kernel 1 — split dense into tiles and produce per-tile bitmask + counts
+# ---------------------------------------------------------------------------
 @triton.jit
-def _count_pack_kernel(dense_ptr, block_counts_ptr, packed_mask_out,
-                       N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
-    """Count nonzeros per block and simultaneously pack the per-byte bitmask,
-    storing per-block popcounts into block_counts_ptr."""
+def _tile_pack_kernel(
+    dense_ptr,
+    tile_counts_ptr,
+    tile_bitmasks_ptr,
+    tile_scratch_ptr,
+    M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    pid = pid_m * tl.num_programs(1) + pid_n
+
+    # load one [BLOCK_M × BLOCK_N] tile from the dense matrix
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    tile = tl.load(dense_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+
+    # flatten to 1D (row-major) for bitmask packing
+    tile_flat = tl.reshape(tile, (TILE_NUMEL,))
+    nz = (tile_flat > 0.0)
+
+    # pack bits → bytes: 8 bools per uint8, little-endian within each byte
+    nz_reshaped = tl.reshape(nz, (TILE_BYTES, 8))
+    bit_weights = tl.arange(0, 8)[None, :]
+    bytes_val = tl.sum(nz_reshaped.to(tl.int32) << bit_weights, 1).to(tl.uint8)
+    tl.store(tile_bitmasks_ptr + pid * TILE_BYTES + tl.arange(0, TILE_BYTES), bytes_val)
+
+    # per-tile nonzero count (used for prefix sum in the next stage)
+    nnz = tl.sum(nz.to(tl.int32))
+    tl.store(tile_counts_ptr + pid, nnz)
+
+    # keep a dense copy of the tile for the compaction pass below
+    tl.store(tile_scratch_ptr + pid * TILE_NUMEL + tl.arange(0, TILE_NUMEL), tile_flat)
+
+
+# ---------------------------------------------------------------------------
+# Kernel 2 — compact: scatter each tile's nonzeros into a single contiguous
+#            vals array using the precomputed prefix offsets
+# ---------------------------------------------------------------------------
+@triton.jit
+def _compact_vals_kernel(
+    tile_scratch_ptr,
+    tile_prefix_ptr,
+    vals_out_ptr,
+    TILE_NUMEL: tl.constexpr,
+):
     pid = tl.program_id(0)
-    byte_offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
-    byte_valid = byte_offs * 8 < N
+    base = tl.load(tile_prefix_ptr + pid)          # offset of this tile in vals_out
 
-    byte_offs_2d = byte_offs[:, None]
-    bit_offs_2d = tl.arange(0, 8)[None, :]
+    # reload the dense tile from scratch and re-derive the nonzero mask
+    offs = tl.arange(0, TILE_NUMEL)
+    v = tl.load(tile_scratch_ptr + pid * TILE_NUMEL + offs)
+    nz = (v > 0.0).to(tl.int32)
 
-    elem_offs_2d = byte_offs_2d * 8 + bit_offs_2d
-    in_bounds_2d = elem_offs_2d < N
-    x_2d = tl.load(dense_ptr + elem_offs_2d, mask=in_bounds_2d, other=0.0)
-    nz_2d = (x_2d != 0).to(tl.int32)
-
-    byte_nz = tl.sum(nz_2d, 1)
-    byte_val = tl.sum(nz_2d << bit_offs_2d, 1)
-
-    block_count = tl.sum(byte_nz, 0)
-    tl.store(block_counts_ptr + pid, block_count)
-    tl.store(packed_mask_out + byte_offs, byte_val.to(tl.uint8),
-             mask=byte_valid)
+    # local rank of each nonzero within the tile → global position in vals_out
+    ranks = tl.cumsum(nz, 0) - 1
+    tl.store(vals_out_ptr + base + ranks, v, mask=(nz == 1))
 
 
-@triton.jit
-def _prefix_total_kernel(block_counts, block_prefix, total_count,
-                         n_blocks: tl.constexpr, BLOCK_SCAN: tl.constexpr):
-    """Exclusive prefix sum over block_counts plus total sum, yielding both
-    per-block starting offsets and the global number of nonzero values."""
-    offs = tl.arange(0, BLOCK_SCAN)
-    counts = tl.load(block_counts + offs, mask=offs < n_blocks, other=0)
-    total = tl.sum(counts, 0)
-    prefix = tl.cumsum(counts, 0) - counts
-    tl.store(block_prefix + offs, prefix, mask=offs < n_blocks)
-    tl.store(total_count, total)
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128):
+    """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
+    Returns (vals, meta) where meta is a dict with keys:
+      bitmask, prefix, grid_m, grid_n, BLOCK_M, BLOCK_N
+    """
+    M, N = dense.shape
 
-@triton.jit
-def _vals_kernel(dense_ptr, block_prefix_ptr, vals_out,
-                 N: tl.constexpr, BLOCK: tl.constexpr):
-    """Extract nonzero values from each block and compact them into vals_out
-    using the precomputed prefix offsets."""
-    pid = tl.program_id(0)
-    elem_offs = pid * BLOCK + tl.arange(0, BLOCK)
-    elem_offs = tl.max_contiguous(tl.multiple_of(elem_offs, BLOCK), BLOCK)
-    elem_valid = elem_offs < N
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
 
-    x = tl.load(dense_ptr + elem_offs, mask=elem_valid, other=0.0,
-                eviction_policy="evict_first")
-    nz = (x != 0).to(tl.int32)
+    grid_m = triton.cdiv(M, BLOCK_M)
+    grid_n = triton.cdiv(N, BLOCK_N)
+    num_tiles = grid_m * grid_n
 
-    byte_pos = tl.cumsum(nz, 0) - nz
-    global_base = tl.load(block_prefix_ptr + pid)
-    val_idx = global_base + byte_pos
+    # --- launch: tile pack (bitmask + counts + dense scratch) ---
+    tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
+    tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
+    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=dense.device, dtype=dense.dtype)
 
-    tl.store(vals_out + val_idx, x, mask=elem_valid & (nz == 1))
-
-
-def bitsparse_pack(dense: torch.Tensor, block=2048) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pack a dense tensor into a compressed sparse representation.
-
-    Given a 2D dense CUDA tensor, extract nonzero values in row-major order
-    (vals) and produce a uint8 bitmask (packed_mask, 8 bits per byte).
-    Processed in blocks for parallelism using Triton kernels."""
-    device = dense.device
-
-    N = dense.numel()                             # total number of elements
-    flat = dense.flatten()                        # flatten to 1D for processing
-    n_bytes = triton.cdiv(N, 8)                   # bytes needed for the bitmask
-    n_blocks = triton.cdiv(N, block)              # number of element blocks
-
-    packed_mask = torch.empty(n_bytes, device=device, dtype=torch.uint8)
-    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    total_count = torch.zeros(1, device=device, dtype=torch.int32)
-
-    # Step 1: count nonzeros per block and pack the bitmask
-    _count_pack_kernel[(n_blocks,)](
-        flat, block_counts, packed_mask, N=N, BYTE_BLOCK=block // 8,
+    _tile_pack_kernel[(grid_m, grid_n)](
+        dense, tile_counts, tile_bitmasks, tile_scratch,
+        M, N,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
         num_warps=4, num_stages=2,
     )
 
-    # Step 2: exclusive prefix sum over counts → per-block offsets + total NZ count
-    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
-    _prefix_total_kernel[(1,)](
-        block_counts, block_prefix, total_count,
-        n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
+    # --- host: exclusive prefix sum over per-tile counts ---
+    tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
+    torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
+    tile_prefix[0] = 0
+
+    total_nnz = tile_prefix[-1].item()
+
+    # --- launch: compact nonzeros into contiguous vals ---
+    vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
+    _compact_vals_kernel[(num_tiles,)](
+        tile_scratch, tile_prefix, vals,
+        TILE_NUMEL=TILE_NUMEL,
+        num_warps=8, num_stages=2,
     )
 
-    # Step 3: compact nonzero values into vals using the prefix offsets
-    vals = torch.empty(total_count, device=device, dtype=dense.dtype)
-
-    _vals_kernel[(n_blocks,)](
-        flat, block_prefix, vals,
-        N=N, BLOCK=block,
-        num_stages=2,
-    )
-
-    return vals, packed_mask
+    meta = {
+        'bitmask': tile_bitmasks,
+        'prefix': tile_prefix,
+        'grid_m': grid_m,
+        'grid_n': grid_n,
+        'BLOCK_M': BLOCK_M,
+        'BLOCK_N': BLOCK_N,
+    }
+    return vals, meta

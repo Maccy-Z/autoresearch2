@@ -1,10 +1,8 @@
-import sys
 import torch
 import time
 
-sys.path.insert(0, '.')
-from tilesparse import dense_to_tilesparse
-from matmul_bitsparse.sparse_unpack import bitsparse_unpack
+from sparse_pack import dense_to_tilesparse
+from sparse_unpack import bitsparse_unpack
 
 
 def generate_parameters(dim, expansion=4, shift=0.1, seed=1, device="cuda"):

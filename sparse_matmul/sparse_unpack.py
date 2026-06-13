@@ -4,94 +4,70 @@ import triton.language as tl
 
 
 @triton.jit
-def _compute_block_counts_kernel(packed_mask, block_counts,
-                                  N: tl.constexpr, BYTE_BLOCK: tl.constexpr):
-    """Compute the number of set bits (1s) in each block of the packed bitmask,
-    storing per-block popcounts into block_counts."""
-    pid = tl.program_id(0)
-    offs = pid * BYTE_BLOCK + tl.arange(0, BYTE_BLOCK)
-    n_bytes = tl.cdiv(N, 8)
+def _unpack_tiles_kernel(
+    tile_bitmasks_ptr,
+    vals_ptr,
+    tile_prefix_ptr,
+    out_ptr,
+    grid_n, out_M, out_N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    pid = pid_m * grid_n + pid_n
 
-    byte = tl.load(packed_mask + offs, mask=offs < n_bytes, other=0).to(tl.int32)
+    byte_offs = pid * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(tile_bitmasks_ptr + byte_offs).to(tl.int32)
 
-    x = byte
-    x = (x & 0x55) + ((x >> 1) & 0x55)
-    x = (x & 0x33) + ((x >> 2) & 0x33)
-    x = (x & 0x0F) + ((x >> 4) & 0x0F)
-    total = tl.sum(x, 0)
-    tl.store(block_counts + pid, total)
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    bit_pos = tl.arange(0, 8)[None, :]
+    bits = (bytes_2d >> bit_pos) & 1
+    mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
 
+    base = tl.load(tile_prefix_ptr + pid)
 
-@triton.jit
-def _prefix_sum_kernel(block_counts, block_prefix,
-                       n_blocks: tl.constexpr, BLOCK_SCAN: tl.constexpr):
-    """Compute an exclusive prefix sum over block_counts, yielding the starting
-    offset into the packed values array for each block."""
-    offs = tl.arange(0, BLOCK_SCAN)
-    counts = tl.load(block_counts + offs, mask=offs < n_blocks, other=0)
-    prefix = tl.cumsum(counts, 0) - counts
-    tl.store(block_prefix + offs, prefix, mask=offs < n_blocks)
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
 
+    tile_offs = tl.arange(0, TILE_NUMEL)
+    tile_rows = tile_offs // BLOCK_N
+    tile_cols = tile_offs % BLOCK_N
 
-@triton.jit
-def _reconstruct_packed_kernel(vals, packed_mask, block_prefix, out,
-                               N: tl.constexpr, BLOCK: tl.constexpr):
-    """Scatter packed values back to their original positions: for each bit=1,
-    read the next value from vals; for bit=0, write zero."""
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    global_r = pid_m * BLOCK_M + tile_rows
+    global_c = pid_n * BLOCK_N + tile_cols
+    out_offs = global_r * out_N + global_c
 
-    byte_idx = offs // 8
-    bit_idx = offs % 8
-
-    byte = tl.load(packed_mask + byte_idx, mask=offs < N, other=0).to(tl.int32)
-    m = ((byte >> bit_idx) & 1).to(tl.int32)
-
-    local_idx = tl.cumsum(m, 0) - 1
-    base = tl.load(block_prefix + pid)
-
-    v = tl.load(vals + base + local_idx, mask=(offs < N) & (m == 1), other=0.0)
-    tl.store(out + offs, tl.where(m == 1, v, 0.0), mask=offs < N)
+    tl.store(out_ptr + out_offs, v, mask=(global_r < out_M) & (global_c < out_N))
 
 
-def bitsparse_unpack(vals, packed_mask, shape, block=8192) -> torch.Tensor:
-    """Unpack a compressed sparse representation into a dense tensor.
-
-    Given a 1D array of nonzero values (vals) and a uint8 bitmask (packed_mask,
-    8 mask bits per byte), reconstruct a dense tensor of the given shape.
-    Processed in blocks for parallelism using Triton kernels."""
-    assert vals.is_cuda and packed_mask.is_cuda
-    assert packed_mask.dtype == torch.uint8
+def bitsparse_unpack(vals, meta, shape):
+    assert vals.is_cuda
     device = vals.device
 
-    N = shape[0] * shape[1]                       # total number of elements in output
-    n_blocks = triton.cdiv(N, block)              # number of element blocks
+    BLOCK_M = meta['BLOCK_M']
+    BLOCK_N = meta['BLOCK_N']
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
 
-    # Step 1: count how many set bits fall into each block
-    block_counts = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    _compute_block_counts_kernel[(n_blocks,)](
-        packed_mask, block_counts, N=N, BYTE_BLOCK=triton.cdiv(block, 8),
-    )
+    tile_bitmasks = meta['bitmask']
+    tile_prefix = meta['prefix']
+    grid_m = meta['grid_m']
+    grid_n = meta['grid_n']
 
-    # Step 2: exclusive prefix sum → starting offset in vals for each block
-    block_prefix = torch.empty(n_blocks, device=device, dtype=torch.int32)
-    BLOCK_SCAN = triton.next_power_of_2(n_blocks)
-    _prefix_sum_kernel[(1,)](
-        block_counts, block_prefix, n_blocks=n_blocks, BLOCK_SCAN=BLOCK_SCAN,
-    )
+    assert tile_bitmasks.is_cuda and tile_prefix.is_cuda
+    assert tile_bitmasks.dtype == torch.uint8
 
-    out = torch.empty(N, device=device, dtype=vals.dtype)
+    out_M, out_N = shape
+    out = torch.empty(out_M, out_N, device=device, dtype=torch.float32)
 
-    # Step 3: scatter packed values back to original positions using the prefix offsets
-    _reconstruct_packed_kernel[(n_blocks,)](
-        vals,
-        packed_mask,
-        block_prefix,
+    _unpack_tiles_kernel[(grid_m, grid_n)](
+        tile_bitmasks, vals, tile_prefix,
         out,
-        N=N,
-        BLOCK=block,
-        num_warps=8,
-        num_stages=2,
+        grid_n, out_M, out_N,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+        num_warps=8, num_stages=2,
     )
 
-    return out.reshape(shape)
+    return out
