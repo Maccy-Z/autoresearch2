@@ -55,7 +55,7 @@ def _reconstruct_packed_kernel(vals, packed_mask, block_prefix, out,
     tl.store(out + offs, tl.where(m == 1, v, 0.0), mask=offs < N)
 
 
-def bitsparse_unpack(vals, packed_mask, shape, block=65536) -> torch.Tensor:
+def bitsparse_unpack(vals, packed_mask, shape, block=8192) -> torch.Tensor:
     """Unpack a compressed sparse representation into a dense tensor.
 
     Given a 1D array of nonzero values (vals) and a uint8 bitmask (packed_mask,
