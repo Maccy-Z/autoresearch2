@@ -66,6 +66,7 @@ def evaluate_kernel(sparse_relu_fn, atol=1e-2, rtol=1e-5):
 
 
 def run_base():
+    torch.set_float32_matmul_precision("high")
     evaluate_kernel(exact_solution)
 
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import time
 
-from sparse_unpack import  bitsparse_unpack
+from sparse_unpack import bitsparse_unpack
 
 def generate_parameters(dim, expansion, shift=0., seed=1, device="cuda"):
     """ Fixed weights and inputs for consistency """
