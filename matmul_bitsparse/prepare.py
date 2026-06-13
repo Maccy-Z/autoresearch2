@@ -84,8 +84,6 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
         meta_size = check_out_dict(meta)
         tot_size = meta_size + vals.numel() * vals.element_size() / 1024**2
         full_size = y_true.numel() * y_true.element_size() / 1024**2
-        print(f'{tot_size=:.2f}MB, {full_size=:.2f}MB')
-
         assert (tot_size < full_size * fill_frac * 1.1+0.02*tot_size)
 
         # Timing
