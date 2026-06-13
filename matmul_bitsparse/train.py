@@ -74,17 +74,15 @@ def _compact_vals_kernel(
     tile_vals_scratch_ptr,
     tile_prefix_ptr,
     vals_out_ptr,
-    TILE_NUMEL: tl.constexpr, BLOCK_C: tl.constexpr,
+    TILE_NUMEL: tl.constexpr,
 ):
     pid = tl.program_id(0)
     base = tl.load(tile_prefix_ptr + pid)
     nnz = tl.load(tile_prefix_ptr + pid + 1) - base
 
-    offs = tl.arange(0, BLOCK_C)
-    for b in range(0, TILE_NUMEL, BLOCK_C):
-        e = offs + b
-        v = tl.load(tile_vals_scratch_ptr + pid * TILE_NUMEL + e, mask=e < nnz, other=0.0)
-        tl.store(vals_out_ptr + base + e, v, mask=e < nnz)
+    offs = tl.arange(0, TILE_NUMEL)
+    v = tl.load(tile_vals_scratch_ptr + pid * TILE_NUMEL + offs, mask=offs < nnz, other=0.0)
+    tl.store(vals_out_ptr + base + offs, v, mask=offs < nnz)
 
 
 def sparse_relu_Ax(W1, x):
@@ -117,7 +115,7 @@ def sparse_relu_Ax(W1, x):
 
     _compact_vals_kernel[(num_tiles,)](
         tile_vals_scratch, tile_prefix, vals,
-        TILE_NUMEL=TILE_NUMEL, BLOCK_C=256,
+        TILE_NUMEL=TILE_NUMEL,
         num_warps=4, num_stages=2,
     )
 
