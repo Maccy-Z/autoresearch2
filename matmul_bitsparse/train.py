@@ -5,7 +5,6 @@ import torch
 import triton
 import triton.language as tl
 from prepare import evaluate_kernel
-from sparse_pack import _compact_vals_kernel
 
 
 @triton.autotune(
@@ -24,7 +23,7 @@ def _matmul_sparse_kernel(
     A_ptr, B_ptr,
     tile_counts_ptr,
     tile_bitmasks_ptr,
-    tile_scratch_ptr,
+    tile_vals_ptr,
     M, N, K,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
@@ -64,20 +63,13 @@ def _matmul_sparse_kernel(
     tl.store(tile_counts_ptr + pid, nnz)
 
     offs = tl.arange(0, TILE_NUMEL)
-    tl.store(tile_scratch_ptr + pid * TILE_NUMEL + offs, acc_flat)
+    tl.store(tile_vals_ptr + pid * TILE_NUMEL + offs, acc_flat)
 
 
 _buffer_cache = {}
 
 def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
-    """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata.
-
-    M = batch size (x.shape[0]), N = output features (W1.shape[0]).
-    The output (M x N) is tiled into a grid of BLOCK_M x BLOCK_N tiles.
-    grid_m = ceil(M / BLOCK_M) tiles along the batch (M) dimension.
-    grid_n = ceil(N / BLOCK_N) tiles along the output feature (N) dimension.
-    Each tile is independently processed: matmul → ReLU → extract non-zeros.
-    """
+    """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata."""
     M, K = x.shape
     N = W1.shape[0]
 
@@ -93,32 +85,24 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     if buf is None:
         tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
         tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
-        tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=x.device, dtype=x.dtype)
-        tile_prefix = torch.empty(num_tiles + 1, device=x.device, dtype=torch.int32)
-        _buffer_cache[cache_key] = (tile_counts, tile_bitmasks, tile_scratch, tile_prefix)
+        tile_dense = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
+        _buffer_cache[cache_key] = (tile_counts, tile_bitmasks, tile_dense)
     else:
-        tile_counts, tile_bitmasks, tile_scratch, tile_prefix = buf
+        tile_counts, tile_bitmasks, tile_dense = buf
 
     grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     _matmul_sparse_kernel[grid](
-        x, W1, tile_counts, tile_bitmasks, tile_scratch,
+        x, W1, tile_counts, tile_bitmasks, tile_dense,
         M, N, K,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
         INPUT_PRECISION=input_precision,
     )
 
-    torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
-    tile_prefix[0] = 0
+    total_nnz = tile_counts.sum().item()
+    vals = tile_dense[:total_nnz]
 
-    total_nnz = tile_prefix[-1].item()
-    vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
-
-    _compact_vals_kernel[(num_tiles,)](
-        tile_scratch, tile_prefix, vals,
-        TILE_NUMEL=TILE_NUMEL,
-        num_warps=8, num_stages=2,
-    )
+    tile_prefix = torch.arange(num_tiles + 1, device=x.device, dtype=torch.int32) * TILE_NUMEL
 
     meta = {
         'bitmask': tile_bitmasks,
