@@ -27,9 +27,10 @@ def _unpack_tiles_kernel(
 
     base = tl.load(tile_prefix_ptr + pid)
 
-    tile_offs = tl.arange(0, TILE_NUMEL)
-    v = tl.load(vals_ptr + base + tile_offs, mask=(mask_bits == 1), other=0.0)
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
 
+    tile_offs = tl.arange(0, TILE_NUMEL)
     tile_rows = tile_offs // BLOCK_N
     tile_cols = tile_offs % BLOCK_N
 
