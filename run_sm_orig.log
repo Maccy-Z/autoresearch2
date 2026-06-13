@@ -1,8 +1,0 @@
-Shape torch.Size([2048, 512]), fill 0.471: Time 0.496ms
-Shape torch.Size([2048, 512]), fill 0.529: Time 0.468ms
-Shape torch.Size([8192, 2048]), fill 0.471: Time 5.92ms
-Shape torch.Size([8192, 2048]), fill 0.529: Time 6.03ms
-Shape torch.Size([16384, 4096]), fill 0.471: Time 23ms
-Shape torch.Size([16384, 4096]), fill 0.529: Time 23.1ms
-passed
-Total time: 59.002ms
