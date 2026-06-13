@@ -4,6 +4,7 @@ import time
 
 from sparse_unpack import bitsparse_unpack
 
+
 def generate_parameters(dim, expansion, shift=0., seed=1, device="cuda"):
     """ Fixed weights and inputs for consistency """
     G = torch.Generator(device=device).manual_seed(seed)
