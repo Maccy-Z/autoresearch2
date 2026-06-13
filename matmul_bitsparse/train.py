@@ -93,8 +93,8 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128):
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
+    # Host sync required.
     total_nnz = tile_prefix[-1].item()
-
     vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
     _compact_vals_kernel[(num_tiles,)](
