@@ -1,7 +1,11 @@
+import sys
+sys.path.insert(0, '.')
+
 import torch
 import triton
 import triton.language as tl
 from prepare import evaluate_kernel
+from tilesparse import _compact_vals_kernel
 
 
 @triton.autotune(
@@ -60,24 +64,6 @@ def _matmul_sparse_kernel(
 
     offs = tl.arange(0, TILE_NUMEL)
     tl.store(tile_scratch_ptr + pid * TILE_NUMEL + offs, acc_flat)
-
-
-@triton.jit
-def _compact_vals_kernel(
-    tile_scratch_ptr,
-    tile_prefix_ptr,
-    vals_out_ptr,
-    TILE_NUMEL: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    base = tl.load(tile_prefix_ptr + pid)
-
-    offs = tl.arange(0, TILE_NUMEL)
-    v = tl.load(tile_scratch_ptr + pid * TILE_NUMEL + offs)
-    nz = (v > 0.0).to(tl.int32)
-
-    ranks = tl.cumsum(nz, 0) - 1
-    tl.store(vals_out_ptr + base + ranks, v, mask=(nz == 1))
 
 
 def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128):

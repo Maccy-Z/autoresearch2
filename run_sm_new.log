@@ -1,0 +1,10 @@
+/home/bubbles/miniforge3/envs/optimiser/lib/python3.14/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+  warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+Shape [2048, 512], fill 0.471: Time 0.474ms
+Shape [2048, 512], fill 0.529: Time 0.496ms
+Shape [8192, 2048], fill 0.471: Time 6.18ms
+Shape [8192, 2048], fill 0.529: Time 6.2ms
+Shape [16384, 4096], fill 0.471: Time 23.8ms
+Shape [16384, 4096], fill 0.529: Time 23.7ms
+passed
+Total time: 60.88ms
