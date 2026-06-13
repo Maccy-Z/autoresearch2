@@ -28,6 +28,7 @@ def _matmul_sparse_kernel(
     M, N, K,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    INPUT_PRECISION: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -44,7 +45,7 @@ def _matmul_sparse_kernel(
     for k in range(0, K, BLOCK_K):
         a = tl.load(a_ptrs, mask=(rm[:, None] < M) & (k + rk[None, :] < K), other=0.0)
         b = tl.load(b_ptrs, mask=(rn[:, None] < N) & (k + rk[None, :] < K), other=0.0)
-        acc += tl.dot(a, tl.trans(b), input_precision="tf32")
+        acc += tl.dot(a, tl.trans(b), input_precision=INPUT_PRECISION)
         a_ptrs += BLOCK_K
         b_ptrs += BLOCK_K
 
@@ -66,7 +67,15 @@ def _matmul_sparse_kernel(
     tl.store(tile_scratch_ptr + pid * TILE_NUMEL + offs, acc_flat)
 
 
-def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128):
+def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
+    """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata.
+
+    M = batch size (x.shape[0]), N = output features (W1.shape[0]).
+    The output (M x N) is tiled into a grid of BLOCK_M x BLOCK_N tiles.
+    grid_m = ceil(M / BLOCK_M) tiles along the batch (M) dimension.
+    grid_n = ceil(N / BLOCK_N) tiles along the output feature (N) dimension.
+    Each tile is independently processed: matmul → ReLU → extract non-zeros.
+    """
     M, K = x.shape
     N = W1.shape[0]
 
@@ -87,6 +96,7 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128):
         M, N, K,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+        INPUT_PRECISION=input_precision,
     )
 
     tile_prefix = torch.empty(num_tiles + 1, device=x.device, dtype=torch.int32)
