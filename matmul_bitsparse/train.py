@@ -32,20 +32,22 @@ def _matmul_sparse_kernel(
     pid_n = tl.program_id(1)
     pid = pid_m * tl.num_programs(1) + pid_n
 
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    rk = tl.arange(0, BLOCK_K)
-
-    a_ptrs = A_ptr + rm[:, None] * K + rk[None, :]
-    b_ptrs = B_ptr + rn[:, None] * K + rk[None, :]
+    a_base = tl.make_block_ptr(
+        base=A_ptr, shape=(M, K), strides=(K, 1),
+        offsets=(pid_m * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_K), order=(0, 1),
+    )
+    b_base = tl.make_block_ptr(
+        base=B_ptr, shape=(N, K), strides=(K, 1),
+        offsets=(pid_n * BLOCK_N, 0), block_shape=(BLOCK_N, BLOCK_K), order=(0, 1),
+    )
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
-        a = tl.load(a_ptrs, mask=(rm[:, None] < M) & (k + rk[None, :] < K), other=0.0)
-        b = tl.load(b_ptrs, mask=(rn[:, None] < N) & (k + rk[None, :] < K), other=0.0)
+        a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
+        b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
         acc += tl.dot(a, tl.trans(b), input_precision=INPUT_PRECISION)
-        a_ptrs += BLOCK_K
-        b_ptrs += BLOCK_K
+        a_base = tl.advance(a_base, (0, BLOCK_K))
+        b_base = tl.advance(b_base, (0, BLOCK_K))
 
     acc = tl.maximum(acc, 0)
 
