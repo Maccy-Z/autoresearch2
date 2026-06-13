@@ -49,8 +49,6 @@ def _matmul_sparse_kernel(
         a_ptrs += BLOCK_K
         b_ptrs += BLOCK_K
 
-    valid = (rm[:, None] < M) & (rn[None, :] < N)
-    acc = tl.where(valid, acc, 0.0)
     acc = tl.maximum(acc, 0)
 
     acc_flat = tl.reshape(acc, (TILE_NUMEL,))
