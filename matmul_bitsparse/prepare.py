@@ -40,6 +40,16 @@ def dataloader():
             yield W, x, y
 
 
+def check_out_dict(meta):
+    size = 0
+    for k, v in meta.items():
+        if isinstance(v, int) or isinstance(v, float):
+            continue
+        size += v.nelement() * v.element_size() / 1024**2       # in MB
+
+    return size
+
+
 def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
     torch.manual_seed(0)
 
@@ -70,6 +80,15 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
         numel = W.shape[0] * x.shape[0]          # Shape of y
         fill_frac = vals.numel() / numel
 
+        # Check size is ok, with a bit extra.
+        meta_size = check_out_dict(meta)
+        tot_size = meta_size + vals.numel() * vals.element_size() / 1024**2
+        full_size = y_true.numel() * y_true.element_size() / 1024**2
+        print(f'{tot_size=:.2f}MB, {full_size=:.2f}MB')
+
+        assert (tot_size < full_size * fill_frac * 1.1+0.02*tot_size)
+
+        # Timing
         time_taken = 1000*(end - start) / steps
         print(f"Shape {W.shape}, fill {fill_frac:.3f}: Time {time_taken:.3g}ms")
         total_time += time_taken
