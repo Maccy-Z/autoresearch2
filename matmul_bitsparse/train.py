@@ -16,6 +16,7 @@ from prepare import evaluate_kernel
         triton.Config({'BLOCK_K': 64}, num_warps=8, num_stages=3),
         triton.Config({'BLOCK_K': 64}, num_warps=8, num_stages=4),
         triton.Config({'BLOCK_K': 128}, num_warps=4, num_stages=1),
+        triton.Config({'BLOCK_K': 128}, num_warps=8, num_stages=1),
     ],
     key=['M', 'N', 'K'],
 )
