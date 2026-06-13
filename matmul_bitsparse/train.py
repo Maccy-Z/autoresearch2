@@ -3,11 +3,6 @@ import triton
 import triton.language as tl
 from prepare import evaluate_kernel
 
-BLOCK_M = 128
-BLOCK_N = 128
-TILE_NUMEL = BLOCK_M * BLOCK_N
-TILE_BYTES = TILE_NUMEL // 8
-
 
 @triton.autotune(
     configs=[
@@ -25,15 +20,14 @@ def _matmul_sparse_kernel(
     A_ptr, B_ptr,
     tile_counts_ptr,
     tile_bitmasks_ptr,
-    tile_vals_scratch_ptr,
+    tile_scratch_ptr,
     M, N, K,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
-    grid_n = tl.num_programs(1)
-    pid = pid_m * grid_n + pid_n
+    pid = pid_m * tl.num_programs(1) + pid_n
 
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -56,23 +50,21 @@ def _matmul_sparse_kernel(
     nz = (acc_flat > 0.0)
 
     nz_reshaped = tl.reshape(nz, (TILE_BYTES, 8))
-    bit_select = tl.arange(0, 8)[None, :]
-    bytes_val = tl.sum(nz_reshaped.to(tl.int32) << bit_select, 1).to(tl.uint8)
+    bit_weights = tl.arange(0, 8)[None, :]
+    bytes_val = tl.sum(nz_reshaped.to(tl.int32) << bit_weights, 1).to(tl.uint8)
 
-    mask_offs = pid * TILE_BYTES + tl.arange(0, TILE_BYTES)
-    tl.store(tile_bitmasks_ptr + mask_offs, bytes_val)
+    tl.store(tile_bitmasks_ptr + pid * TILE_BYTES + tl.arange(0, TILE_BYTES), bytes_val)
 
     nnz = tl.sum(nz.to(tl.int32))
     tl.store(tile_counts_ptr + pid, nnz)
 
-    scratch_base = tile_vals_scratch_ptr + pid * TILE_NUMEL
-    scratch_offs = tl.arange(0, TILE_NUMEL)
-    tl.store(scratch_base + scratch_offs, acc_flat)
+    offs = tl.arange(0, TILE_NUMEL)
+    tl.store(tile_scratch_ptr + pid * TILE_NUMEL + offs, acc_flat)
 
 
 @triton.jit
 def _compact_vals_kernel(
-    tile_vals_scratch_ptr,
+    tile_scratch_ptr,
     tile_prefix_ptr,
     vals_out_ptr,
     TILE_NUMEL: tl.constexpr,
@@ -81,16 +73,19 @@ def _compact_vals_kernel(
     base = tl.load(tile_prefix_ptr + pid)
 
     offs = tl.arange(0, TILE_NUMEL)
-    v = tl.load(tile_vals_scratch_ptr + pid * TILE_NUMEL + offs)
+    v = tl.load(tile_scratch_ptr + pid * TILE_NUMEL + offs)
     nz = (v > 0.0).to(tl.int32)
 
     ranks = tl.cumsum(nz, 0) - 1
     tl.store(vals_out_ptr + base + ranks, v, mask=(nz == 1))
 
 
-def sparse_relu_Ax(W1, x):
+def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128):
     M, K = x.shape
     N = W1.shape[0]
+
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
 
     grid_m = triton.cdiv(M, BLOCK_M)
     grid_n = triton.cdiv(N, BLOCK_N)
@@ -98,11 +93,11 @@ def sparse_relu_Ax(W1, x):
 
     tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
-    tile_vals_scratch = torch.empty(num_tiles, TILE_NUMEL, device=x.device, dtype=x.dtype)
+    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=x.device, dtype=x.dtype)
 
     grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     _matmul_sparse_kernel[grid](
-        x, W1, tile_counts, tile_bitmasks, tile_vals_scratch,
+        x, W1, tile_counts, tile_bitmasks, tile_scratch,
         M, N, K,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
@@ -117,15 +112,22 @@ def sparse_relu_Ax(W1, x):
     vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
     _compact_vals_kernel[(num_tiles,)](
-        tile_vals_scratch, tile_prefix, vals,
+        tile_scratch, tile_prefix, vals,
         TILE_NUMEL=TILE_NUMEL,
         num_warps=8, num_stages=2,
     )
 
-    return vals, tile_bitmasks, tile_prefix, grid_m, grid_n
+    meta = {
+        'bitmask': tile_bitmasks,
+        'prefix': tile_prefix,
+        'grid_m': grid_m,
+        'grid_n': grid_n,
+        'BLOCK_M': BLOCK_M,
+        'BLOCK_N': BLOCK_N,
+    }
+    return vals, meta
 
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-
     evaluate_kernel(sparse_relu_Ax)

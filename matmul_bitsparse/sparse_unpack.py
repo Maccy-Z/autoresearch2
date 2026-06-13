@@ -2,11 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-BLOCK_M = tl.constexpr(128)
-BLOCK_N = tl.constexpr(128)
-TILE_NUMEL = BLOCK_M.value * BLOCK_N.value
-TILE_BYTES = TILE_NUMEL // 8
-
 
 @triton.jit
 def _unpack_tiles_kernel(
@@ -15,6 +10,7 @@ def _unpack_tiles_kernel(
     tile_prefix_ptr,
     out_ptr,
     grid_n, out_M, out_N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
@@ -31,8 +27,8 @@ def _unpack_tiles_kernel(
 
     base = tl.load(tile_prefix_ptr + pid)
 
-    local_ranks = tl.cumsum(mask_bits, 0) - 1
-    v = tl.load(vals_ptr + base + local_ranks, mask=(mask_bits == 1), other=0.0)
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
 
     tile_offs = tl.arange(0, TILE_NUMEL)
     tile_rows = tile_offs // BLOCK_N
@@ -40,36 +36,38 @@ def _unpack_tiles_kernel(
 
     global_r = pid_m * BLOCK_M + tile_rows
     global_c = pid_n * BLOCK_N + tile_cols
-
     out_offs = global_r * out_N + global_c
-    out_mask = (global_r < out_M) & (global_c < out_N)
 
-    tl.store(out_ptr + out_offs, v, mask=out_mask)
+    tl.store(out_ptr + out_offs, v, mask=(global_r < out_M) & (global_c < out_N))
 
 
-def bitsparse_unpack(
-    vals: torch.Tensor,
-    tile_bitmasks: torch.Tensor,
-    tile_prefix: torch.Tensor,
-    grid_m: int,
-    grid_n: int,
-    shape: list[int],
-) -> torch.Tensor:
-    assert vals.is_cuda and tile_bitmasks.is_cuda and tile_prefix.is_cuda
-    assert tile_bitmasks.dtype == torch.uint8
+def bitsparse_unpack(vals, meta, shape):
+    assert vals.is_cuda
     device = vals.device
 
-    out_M, out_N = shape[0], shape[1]
+    BLOCK_M = meta['BLOCK_M']
+    BLOCK_N = meta['BLOCK_N']
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
 
+    tile_bitmasks = meta['bitmask']
+    tile_prefix = meta['prefix']
+    grid_m = meta['grid_m']
+    grid_n = meta['grid_n']
+
+    assert tile_bitmasks.is_cuda and tile_prefix.is_cuda
+    assert tile_bitmasks.dtype == torch.uint8
+
+    out_M, out_N = shape
     out = torch.empty(out_M, out_N, device=device, dtype=torch.float32)
 
     _unpack_tiles_kernel[(grid_m, grid_n)](
         tile_bitmasks, vals, tile_prefix,
         out,
         grid_n, out_M, out_N,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8,
-        num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return out
