@@ -68,8 +68,6 @@ def _matmul_sparse_kernel(
     tl.store(tile_vals_ptr + pid * TILE_NUMEL + offs, acc_flat)
 
 
-_buffer_cache = {}
-
 def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata."""
     M, K = x.shape
@@ -82,15 +80,9 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     grid_n = triton.cdiv(N, BLOCK_N)
     num_tiles = grid_m * grid_n
 
-    cache_key = (M, N, K, BLOCK_M, BLOCK_N, x.dtype)
-    buf = _buffer_cache.get(cache_key)
-    if buf is None:
-        tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
-        tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
-        tile_dense = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
-        _buffer_cache[cache_key] = (tile_counts, tile_bitmasks, tile_dense)
-    else:
-        tile_counts, tile_bitmasks, tile_dense = buf
+    tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
+    tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
+    tile_dense = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
 
     grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     _matmul_sparse_kernel[grid](
