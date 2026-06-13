@@ -45,7 +45,7 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
     steps = 50
 
     total_time = 0
-    vals, mask = None, None
+    vals, tile_bitmasks, tile_prefix, grid_m, grid_n = None, None, None, None, None
     for W, x, y_true in dataloader():
         # Initial warmup:
         for _ in range(10):
@@ -55,13 +55,16 @@ def evaluate_kernel(relu_Ax_fn, atol=1e-2, rtol=1e-5):
         torch.cuda.synchronize()
         start = time.perf_counter()
         for _ in range(steps):
-            vals, mask = relu_Ax_fn(W, x)
+            vals, tile_bitmasks, tile_prefix, grid_m, grid_n = relu_Ax_fn(W, x)
         torch.cuda.synchronize()
         end = time.perf_counter()
 
         # Check accuracy on final run only, after timer ended.
         out_shape = [x.shape[0], W.shape[0]]
-        y = bitsparse_unpack(vals, mask, out_shape)
+        y = bitsparse_unpack(
+            vals, tile_bitmasks, tile_prefix,
+            grid_m, grid_n, out_shape,
+        )
 
         torch.testing.assert_close(y, y_true, atol=atol, rtol=rtol)
         # Total nnz:
