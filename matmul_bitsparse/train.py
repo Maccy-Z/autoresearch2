@@ -74,29 +74,19 @@ def _matmul_sparse_kernel(
 @triton.jit
 def _compact_vals_kernel(
     tile_vals_scratch_ptr,
-    tile_bitmasks_ptr,
     tile_prefix_ptr,
     vals_out_ptr,
-    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    TILE_NUMEL: tl.constexpr,
 ):
     pid = tl.program_id(0)
     base = tl.load(tile_prefix_ptr + pid)
-    nnz = tl.load(tile_prefix_ptr + pid + 1) - base
 
-    byte_offs = pid * TILE_BYTES + tl.arange(0, TILE_BYTES)
-    bytes_val = tl.load(tile_bitmasks_ptr + byte_offs).to(tl.int32)
-
-    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
-    bit_pos = tl.arange(0, 8)[None, :]
-    bits = (bytes_2d >> bit_pos) & 1
-    mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
-
-    scratch_base = tile_vals_scratch_ptr + pid * TILE_NUMEL
     offs = tl.arange(0, TILE_NUMEL)
-    v = tl.load(scratch_base + offs)
+    v = tl.load(tile_vals_scratch_ptr + pid * TILE_NUMEL + offs)
+    nz = (v > 0.0).to(tl.int32)
 
-    ranks = tl.cumsum(mask_bits, 0) - 1
-    tl.store(vals_out_ptr + base + ranks, v, mask=(mask_bits == 1))
+    ranks = tl.cumsum(nz, 0) - 1
+    tl.store(vals_out_ptr + base + ranks, v, mask=(nz == 1))
 
 
 def sparse_relu_Ax(W1, x):
@@ -128,8 +118,8 @@ def sparse_relu_Ax(W1, x):
     vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
     _compact_vals_kernel[(num_tiles,)](
-        tile_vals_scratch, tile_bitmasks, tile_prefix, vals,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+        tile_vals_scratch, tile_prefix, vals,
+        TILE_NUMEL=TILE_NUMEL,
         num_warps=8, num_stages=2,
     )
 
