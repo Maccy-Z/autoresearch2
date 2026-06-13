@@ -25,7 +25,7 @@ from prepare import evaluate_kernel
 def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
                         M, N, K,
                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                        ACC_DTYPE: tl.constexpr, INPUT_PRECISION: tl.constexpr):
+                        INPUT_PRECISION: tl.constexpr):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
@@ -38,7 +38,7 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
         offsets=(0, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0),
     )
 
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_DTYPE)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
         a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
         b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
@@ -55,22 +55,13 @@ def _matmul_relu_kernel(A_ptr, B_ptr, C_ptr,
     tl.store(c_base, acc, boundary_check=(0, 1))
 
 
-_torch_dtype_map = {
-    torch.float32: tl.float32,
-    torch.float16: tl.float16,
-    torch.bfloat16: tl.bfloat16,
-}
-
-
-def relu_sparse_Ax(vals, meta, x, *, dtype=torch.float32,
-                   acc_dtype=torch.float32, tf32=True):
+def relu_sparse_Ax(vals, meta, x, *, dtype=torch.bfloat16, tf32=False):
     """Compute relu(A @ x) where A is sparse in per-tile bitsparse format.
 
     Args:
         vals, meta: per-tile sparse representation of A
         x: dense input tensor [K, N]
         dtype: compute dtype for A and x (torch.bfloat16, torch.float16, torch.float32)
-        acc_dtype: accumulation dtype inside tl.dot (torch.float32 or torch.float16)
         tf32: whether to use TensorFloat32 for fp32 dot products
     """
     A_dense = bitsparse_unpack(vals, meta, meta['shape'])
@@ -81,7 +72,6 @@ def relu_sparse_Ax(vals, meta, x, *, dtype=torch.float32,
     grid = lambda m: (triton.cdiv(M, m['BLOCK_M']), triton.cdiv(N, m['BLOCK_N']))
     _matmul_relu_kernel[grid](
         A_dense.to(dtype), x.to(dtype), out, M, N, K,
-        ACC_DTYPE=_torch_dtype_map[acc_dtype],
         INPUT_PRECISION="tf32" if tf32 else "ieee",
     )
 
