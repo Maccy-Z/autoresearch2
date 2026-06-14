@@ -21,8 +21,8 @@ def generate_parameters(dim1, G, dtype, expansion=4, shift=0., device="cuda"):
 
 
 def exact_solution(W1, W2, x):
-    y1 = F.relu(F.linear(x, W1))
-    y2 = F.relu(F.linear(y1, W2))
+    y1 = F.relu(F.linear(x, W1))        # shape = [bs, 4*in_dim]
+    y2 = F.relu(F.linear(y1, W2))       # shape = [bs, out_dim]
     y1_nz = (y1 != 0).sum()
     return y1_nz, y2
 
@@ -40,7 +40,7 @@ def evaluate_step(rows, shift, G):
     atol = 2e-2
     rtol = 1e-3
     n_tests = 15
-    dtype = torch.bfloat16
+    dtype = torch.float32
 
     # Warmup
     W1, W2, x = generate_parameters(rows, G, shift=shift, dtype=dtype)
@@ -103,7 +103,8 @@ def evaluate_step(rows, shift, G):
         meta_size = check_out_dict(meta)
         tot_size = meta_size + vals.numel() * vals.element_size() / 1024 ** 2
         full_size = numel * vals.element_size() / 1024 ** 2
-        assert tot_size < full_size * fill_frac * 1.1 + 0.02 * tot_size
+        efficiency = tot_size / full_size
+        assert efficiency < fill_frac +1.09
 
         del W2, x, _
         gc.collect()

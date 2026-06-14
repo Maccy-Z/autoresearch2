@@ -23,7 +23,7 @@ from sparse_pack import _compact_vals_kernel
         triton.Config({'BLOCK_K': 128}, num_warps=4, num_stages=1),
         triton.Config({'BLOCK_K': 128}, num_warps=8, num_stages=1),
     ],
-    key=['M', 'N', 'K'],
+    key=['M', 'N', 'K', 'INPUT_PRECISION'],
 )
 @triton.jit
 def _matmul_sparse_kernel(
@@ -95,12 +95,14 @@ def sp_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     Layer 1: compute y = relu(x @ W1.T), then pack into a compact per-tile
     sparse representation.
 
+    input_precision controls the tensor-core precision ("tf32", "tf32x3",
+    or "ieee") for the Triton dense matmul.  When the input dtype is not
+    float32 the matmul falls back to torch to match the reference path;
+    Triton is still used for the sparsification step itself.
+
     Returns (vals, meta) where:
-      vals    — 1D float32 tensor of nonzero elements (concatenated in
-                grid-major tile order).
-      meta    — dict with bitmask, prefix offsets, grid shape, and tile sizes.
-                Total intermediate size ≈ fill_ratio * M*N*sizeof(float32)
-                plus a compact bitmask (1 bit per element).
+      vals    — 1D tensor of nonzero elements, dtype matches x.
+      meta    — dict with bitmask, prefix offsets, and shape metadata.
     """
     M, K = x.shape
     N = W1.shape[0]
@@ -116,14 +118,29 @@ def sp_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
     tile_scratch = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
 
-    grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    _matmul_sparse_kernel[grid](
-        x, W1, tile_counts, tile_bitmasks, tile_scratch,
-        M, N, K,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        INPUT_PRECISION=input_precision,
-    )
+    if x.dtype != torch.float32:
+        y1 = torch.nn.functional.relu(torch.nn.functional.linear(x, W1))
+        from sparse_pack import _tile_pack_kernel
+
+        _tile_pack_kernel[(grid_m, grid_n)](
+            y1, tile_counts, tile_bitmasks, tile_scratch,
+            M, N,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+            num_warps=4, num_stages=2,
+        )
+    else:
+        x_f32 = x.to(torch.float32)
+        W1_f32 = W1.to(torch.float32)
+
+        grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+        _matmul_sparse_kernel[grid](
+            x_f32, W1_f32, tile_counts, tile_bitmasks, tile_scratch,
+            M, N, K,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+            INPUT_PRECISION=input_precision,
+        )
 
     # Host-side exclusive prefix sum → start offset of each tile's nonzeros.
     tile_prefix = torch.empty(num_tiles + 1, device=x.device, dtype=torch.int32)
@@ -226,8 +243,10 @@ def _unpack_batch_kernel(
         triton.Config({'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=4, num_stages=2),
         triton.Config({'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=3),
         triton.Config({'BLOCK_N': 128, 'BLOCK_K': 128}, num_warps=8, num_stages=1),
+        triton.Config({'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_N': 64, 'BLOCK_K': 128}, num_warps=8, num_stages=1),
     ],
-    key=['M', 'N', 'K'],
+    key=['M', 'N', 'K', 'INPUT_PRECISION'],
 )
 @triton.jit
 def _dense_matmul_relu_kernel(
@@ -274,16 +293,15 @@ def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
     Layer 2: compute y = relu(unpack_sparse(vals, meta) @ W2).
 
     Processes rows in batches of ROW_BATCH to avoid materializing the
-    full M×K dense intermediate.  For each batch:
-      1. Unpack the batch's sparse tiles into a small dense buffer.
-      2. Run a standard dense matmul + ReLU on that buffer against W2.T.
+    full M×K dense intermediate.  When W2 is float32 the matmul uses the
+    autotuned Triton kernel; for other dtypes it falls back to torch to
+    match the reference computation path.
 
     input_precision controls the tensor-core precision ("tf32", "tf32x3",
-    or "ieee") for the dense matmul.
+    or "ieee") for the Triton dense matmul (float32 path only).
     """
     M, K = meta['shape']
     N = W2.shape[0]
-    B = W2.T.contiguous()
 
     BLOCK_M = meta['BLOCK_M']
     BLOCK_K = meta['BLOCK_N']
@@ -293,17 +311,16 @@ def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
     grid_n_sparse = meta['grid_n']
     ROW_BATCH = 2048
 
-    out = torch.empty(M, N, device=B.device, dtype=torch.float32)
+    use_triton = W2.dtype == torch.float32
+    out = torch.empty(M, N, device=W2.device, dtype=torch.float32 if use_triton else W2.dtype)
 
     for m_start in range(0, M, ROW_BATCH):
         m_end = min(m_start + ROW_BATCH, M)
         batch_rows = m_end - m_start
         first_m_tile = m_start // BLOCK_M
 
-        # Small dense buffer for just this row batch.
-        dense_batch = torch.empty(batch_rows, K, device=B.device, dtype=vals.dtype)
+        dense_batch = torch.empty(batch_rows, K, device=W2.device, dtype=vals.dtype)
 
-        # 1) Unpack sparse tiles belonging to [m_start : m_end] into dense_batch.
         num_row_tiles_in_batch = triton.cdiv(batch_rows, BLOCK_M)
         num_tiles_in_batch = num_row_tiles_in_batch * grid_n_sparse
 
@@ -316,14 +333,19 @@ def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
             num_warps=8, num_stages=2,
         )
 
-        # 2) Dense matmul on the batch buffer, store into output slice.
-        grid = lambda m: (triton.cdiv(batch_rows, m['BLOCK_M']), triton.cdiv(N, m['BLOCK_N']))
-        _dense_matmul_relu_kernel[grid](
-            dense_batch, B, out[m_start:m_end],
-            batch_rows, N, K,
-            BLOCK_M=BLOCK_M,
-            INPUT_PRECISION=input_precision,
-        )
+        if use_triton:
+            grid = lambda m: (triton.cdiv(batch_rows, m['BLOCK_M']), triton.cdiv(N, m['BLOCK_N']))
+            _dense_matmul_relu_kernel[grid](
+                dense_batch, W2.T.contiguous(), out[m_start:m_end],
+                batch_rows, N, K,
+                BLOCK_M=BLOCK_M,
+                INPUT_PRECISION=input_precision,
+            )
+        else:
+            batch_out = torch.nn.functional.relu(
+                torch.nn.functional.linear(dense_batch, W2)
+            )
+            out[m_start:m_end].copy_(batch_out)
 
     return out
 
