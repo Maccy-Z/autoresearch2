@@ -269,7 +269,7 @@ def _dense_matmul_relu_kernel(
     tl.store(c_base, acc, boundary_check=(0, 1))
 
 
-def sp_relu_spAx(vals, meta, W2):
+def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
     """
     Layer 2: compute y = relu(unpack_sparse(vals, meta) @ W2).
 
@@ -277,6 +277,9 @@ def sp_relu_spAx(vals, meta, W2):
     full M×K dense intermediate.  For each batch:
       1. Unpack the batch's sparse tiles into a small dense buffer.
       2. Run a standard dense matmul + ReLU on that buffer against W2.T.
+
+    input_precision controls the tensor-core precision ("tf32", "tf32x3",
+    or "ieee") for the dense matmul.
     """
     M, K = meta['shape']
     N = W2.shape[0]
@@ -319,7 +322,7 @@ def sp_relu_spAx(vals, meta, W2):
             dense_batch, B, out[m_start:m_end],
             batch_rows, N, K,
             BLOCK_M=BLOCK_M,
-            INPUT_PRECISION="tf32",
+            INPUT_PRECISION=input_precision,
         )
 
     return out
