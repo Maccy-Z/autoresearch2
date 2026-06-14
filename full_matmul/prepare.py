@@ -4,16 +4,15 @@ import time
 import gc
 
 
-def generate_parameters(dim1, dim2, G, expansion=4, shift=0., device="cuda"):
-
+def generate_parameters(dim1, G, dtype, expansion=4, shift=0., device="cuda"):
     hdim = dim1 * expansion
-    W1 = torch.empty(hdim, dim1, device=device)
+    W1 = torch.empty(hdim, dim1, device=device, dtype=dtype)
     torch.nn.init.xavier_uniform_(W1, generator=G)
 
-    W2 = torch.empty(dim2, hdim, device=device)
+    W2 = torch.empty(2048, hdim, device=device, dtype=dtype)
     torch.nn.init.xavier_uniform_(W2, generator=G)
 
-    x = torch.randn(10_000, dim1, device=device, generator=G)
+    x = torch.randn(10_000, dim1, device=device, generator=G, dtype=dtype)
 
     W1 = W1 + 0.1 * W1.std()
     W2 = W2 + 0.1 * W2.std()
@@ -28,11 +27,6 @@ def exact_solution(W1, W2, x):
     return y1_nz, y2
 
 
-def dataloader(rows, shift, G):
-    W1, W2, x = generate_parameters(rows, 512, G=G, shift=shift)
-    return W1, W2, x
-
-
 def check_out_dict(meta):
     size = 0
     for k, v in meta.items():
@@ -45,10 +39,11 @@ def evaluate_step(rows, shift, G):
     from train import sp_relu_Ax, sp_relu_spAx
     atol = 2e-2
     rtol = 1e-3
-    n_tests = 18
+    n_tests = 15
+    dtype = torch.bfloat16
 
     # Warmup
-    W1, W2, x = dataloader(rows, shift, G)
+    W1, W2, x = generate_parameters(rows, G, shift=shift, dtype=dtype)
     for _ in range(5):
         vals, meta = sp_relu_Ax(W1, x)
         _ = sp_relu_spAx(vals, meta, W2)
@@ -57,7 +52,7 @@ def evaluate_step(rows, shift, G):
     torch.cuda.empty_cache()
 
     # Main loop. Do a few spmatmuls at a time.
-    datasets = [dataloader(rows, shift, G) for _ in range(n_tests)]
+    datasets = [generate_parameters(rows, G, shift=shift, dtype=dtype) for _ in range(n_tests)]
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
