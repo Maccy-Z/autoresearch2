@@ -3,6 +3,7 @@ sys.path.insert(0, '.')
 sys.path.insert(0, 'full_matmul')
 
 import torch
+import torch.nn.functional as F
 import triton
 import triton.language as tl
 from sparse_pack import _compact_vals_kernel
@@ -175,8 +176,8 @@ def relu_spAx(vals, meta, W2):
             num_warps=8, num_stages=2,
         )
 
-        batch_out = torch.nn.functional.relu(
-            torch.nn.functional.linear(dense_batch, W2)
+        batch_out = F.relu(
+            F.linear(dense_batch, W2)
         )
         out[m_start:m_end].copy_(batch_out)
 
