@@ -26,15 +26,15 @@ def generate_parameters(dim1, dim2, expansion=4, shift=0., seed=1, device="cuda"
 def exact_solution(W1, W2, x):
     y1 = F.relu(F.linear(x, W1))
     y2 = F.relu(F.linear(y1, W2))
-    return y2
+    return y1, y2
 
 
 def dataloader():
     for rows in [512, 2048, 4096]:
         for shift in [-0.1, 0.1]:
             W1, W2, x = generate_parameters(rows, 512, shift=shift)
-            y = exact_solution(W1, W2, x)
-            yield W1, W2, x, y
+            y1, y2 = exact_solution(W1, W2, x)
+            yield W1, W2, x, y1, y2
 
 
 def check_out_dict(meta):
@@ -53,7 +53,7 @@ def evaluate_kernel():
 
     steps = 50
     total_time = 0
-    for W1, W2, x, y_true in dataloader():
+    for W1, W2, x, y1, y_true in dataloader():
 
         for _ in range(10):
             vals, meta = sp_relu_Ax(W1, x)
@@ -72,7 +72,7 @@ def evaluate_kernel():
 
         # Make sure sparsity is high enough.
         numel = W1.shape[0] * x.shape[0]
-        fill_frac = vals.numel() / numel
+        fill_frac = (y1!=0).sum() / numel
         meta_size = check_out_dict(meta)
         tot_size = meta_size + vals.numel() * vals.element_size() / 1024**2
         full_size = numel * vals.element_size() / 1024**2
