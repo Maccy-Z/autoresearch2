@@ -48,7 +48,7 @@ def check_out_dict(meta):
 def evaluate_kernel():
     from train import sp_relu_Ax, sp_relu_spAx
     torch.manual_seed(0)
-    atol = 3e-2
+    atol = 2e-2
     rtol = 1e-3
 
     steps = 50
