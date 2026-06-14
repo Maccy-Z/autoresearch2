@@ -1,0 +1,74 @@
+import torch
+import torch.nn.functional as F
+import time
+
+
+def generate_parameters(dim1, dim2, expansion=4, shift=0., seed=1, device="cuda"):
+    G = torch.Generator(device=device).manual_seed(seed)
+
+    hdim = dim1 * expansion
+    W1 = torch.empty(hdim, dim1, device=device)
+    torch.nn.init.xavier_uniform_(W1, generator=G)
+
+    W2 = torch.empty(dim2, hdim, device=device)
+    torch.nn.init.xavier_uniform_(W2, generator=G)
+
+    x = torch.randn(10_000, dim1, device=device, generator=G)
+
+    W1 = W1 + 0.1 * W1.std()
+    W2 = W2 + 0.1 * W2.std()
+    x = x + shift * x.std()
+    return W1, W2, x
+
+
+def exact_solution(W1, W2, x):
+    y1 = F.relu(F.linear(x, W1))
+    y2 = F.relu(F.linear(y1, W2))
+    return y2
+
+
+def dataloader():
+    for rows in [512, 2048, 4096]:
+        for shift in [-0.1, 0.1]:
+            W1, W2, x = generate_parameters(rows, 512, shift=shift)
+            y = exact_solution(W1, W2, x)
+            yield W1, W2, x, y
+
+
+def evaluate_kernel(kernel_fn, atol=3e-2, rtol=1e-3):
+    torch.manual_seed(0)
+
+    steps = 50
+    total_time = 0
+    for W1, W2, x, y_true in dataloader():
+        out_shape = [W2.shape[0], x.shape[0]]
+
+        for _ in range(10):
+            _ = kernel_fn(W1, W2, x)
+
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        for _ in range(steps):
+            y = kernel_fn(W1, W2, x)
+
+        torch.cuda.synchronize()
+        end = time.perf_counter()
+
+        torch.testing.assert_close(y, y_true, atol=atol, rtol=rtol)
+
+        time_taken = 1000 * (end - start) / steps
+        print(f"Shape {W1.shape}: Time {time_taken:.3g}ms")
+        total_time += time_taken
+
+    print("passed")
+    print(f"Total time: {total_time:.5g}ms")
+
+
+def run_base():
+    from train import full_relu_matmul
+    torch.set_float32_matmul_precision("high")
+    evaluate_kernel(full_relu_matmul)
+
+
+if __name__ == "__main__":
+    run_base()
