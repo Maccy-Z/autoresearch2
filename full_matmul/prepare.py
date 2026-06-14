@@ -1,8 +1,7 @@
 import torch
 import torch.nn.functional as F
 import time
-
-from sparse_unpack import bitsparse_unpack
+import gc
 
 
 def generate_parameters(dim1, dim2, expansion=4, shift=0., seed=1, device="cuda"):
@@ -54,6 +53,8 @@ def evaluate_kernel():
     steps = 50
     total_time = 0
     for W1, W2, x, y1, y_true in dataloader():
+        gc.collect()
+        torch.cuda.empty_cache()
 
         for _ in range(10):
             vals, meta = sp_relu_Ax(W1, x)

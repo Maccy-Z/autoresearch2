@@ -9,7 +9,11 @@ from sparse_pack import _compact_vals_kernel
 
 
 # ---------------------------------------------------------------------------
-# Layer 1: matmul(x, W1.T) + ReLU + sparsify  (from matmul_bitsparse)
+# Layer 1: dense matmul x @ W1.T, then ReLU, then sparsify into a compact
+# per-tile bitmask format for low-memory storage between layers.
+#
+# Output: (vals, meta) where vals holds only the nonzero elements and meta
+# contains per-tile bitmasks, prefix-sum offsets, and shape metadata.
 # ---------------------------------------------------------------------------
 
 @triton.autotune(
@@ -32,10 +36,19 @@ def _matmul_sparse_kernel(
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
     INPUT_PRECISION: tl.constexpr,
 ):
+    """
+    Each program computes one output tile [BLOCK_M x BLOCK_N] = C[i:j, p:q]
+    via a standard tiled dense matmul over the K dimension.
+    Then it applies ReLU, packs a uint8 bitmask for the nonzero pattern,
+    counts the nonzeros, and writes the full dense tile to a scratch buffer
+    for the downstream compaction pass.
+    """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     pid = pid_m * tl.num_programs(1) + pid_n
 
+    # Block pointers for the input operands.
+    # A: [M, K] row-major  —  B: [K, N] column-major (i.e. W1 stored as [N, K]).
     a_base = tl.make_block_ptr(
         base=A_ptr, shape=(M, K), strides=(K, 1),
         offsets=(pid_m * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_K), order=(0, 1),
@@ -45,6 +58,7 @@ def _matmul_sparse_kernel(
         offsets=(0, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0),
     )
 
+    # Tiled matrix multiply + ReLU
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
         a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
@@ -55,6 +69,9 @@ def _matmul_sparse_kernel(
 
     acc = tl.maximum(acc, 0)
 
+    # Pack the nonzero pattern into a uint8 bitmask (1 bit per element).
+    # Flatten the tile row-major, split into bytes (8 bits each), pack with
+    # little-endian bit positions.
     acc_flat = tl.reshape(acc, (TILE_NUMEL,))
     nz = (acc_flat > 0.0)
 
@@ -64,14 +81,27 @@ def _matmul_sparse_kernel(
 
     tl.store(tile_bitmasks_ptr + pid * TILE_BYTES + tl.arange(0, TILE_BYTES), bytes_val)
 
+    # Per-tile nonzero count (used for prefix-sum on the host).
     nnz = tl.sum(nz.to(tl.int32))
     tl.store(tile_counts_ptr + pid, nnz)
 
+    # Write the full dense tile to scratch for the compaction kernel.
     offs = tl.arange(0, TILE_NUMEL)
     tl.store(tile_scratch_ptr + pid * TILE_NUMEL + offs, acc_flat)
 
 
 def sp_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
+    """
+    Layer 1: compute y = relu(x @ W1.T), then pack into a compact per-tile
+    sparse representation.
+
+    Returns (vals, meta) where:
+      vals    — 1D float32 tensor of nonzero elements (concatenated in
+                grid-major tile order).
+      meta    — dict with bitmask, prefix offsets, grid shape, and tile sizes.
+                Total intermediate size ≈ fill_ratio * M*N*sizeof(float32)
+                plus a compact bitmask (1 bit per element).
+    """
     M, K = x.shape
     N = W1.shape[0]
 
@@ -95,10 +125,12 @@ def sp_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
         INPUT_PRECISION=input_precision,
     )
 
+    # Host-side exclusive prefix sum → start offset of each tile's nonzeros.
     tile_prefix = torch.empty(num_tiles + 1, device=x.device, dtype=torch.int32)
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
+    # Compact: gather only nonzero values into a single contiguous 1D array.
     total_nnz = tile_prefix[-1].item()
     vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
@@ -121,7 +153,19 @@ def sp_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
 
 
 # ---------------------------------------------------------------------------
-# Layer 2: relu(sparse_A @ W2) — batched row-unpack + dense matmul
+# Layer 2: relu(sparse_A @ W2)
+#
+# Consumes the compact (vals, meta) from Layer 1.  Instead of unpacking the
+# entire sparse matrix to dense (which would use M*K floats), we process
+# the rows in batched chunks of ROW_BATCH rows.
+#
+# For each batch:
+#   1. _unpack_batch_kernel  — reconstructs a small dense [batch_rows, K] block
+#      from the per-tile bitmask and compact vals.
+#   2. _dense_matmul_relu_kernel — standard autotuned dense matmul + ReLU
+#      on that block against W2.T.
+#
+# Peak temporary memory is ROW_BATCH * K floats instead of M * K floats.
 # ---------------------------------------------------------------------------
 
 @triton.jit
@@ -132,6 +176,14 @@ def _unpack_batch_kernel(
     BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
 ):
+    """
+    Each program unpacks ONE sparse tile [BLOCK_M x BLOCK_K] from the
+    compact representation and scatters it into the dense output buffer.
+
+    Grid layout: (num_row_tiles_in_batch * grid_n_sparse,) flat,
+    where pid // grid_n_sparse picks the row-tile within the batch
+    and  pid % grid_n_sparse picks the K-tile.
+    """
     pid = tl.program_id(0)
     row_tile_in_batch = pid // grid_n_sparse
     k_tile = pid % grid_n_sparse
@@ -139,6 +191,7 @@ def _unpack_batch_kernel(
     orig_row_tile = first_m_tile + row_tile_in_batch
     tile_id = orig_row_tile * grid_n_sparse + k_tile
 
+    # Read the packed uint8 bitmask and unpack into a [TILE_NUMEL] bool mask.
     byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
     bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
 
@@ -147,11 +200,16 @@ def _unpack_batch_kernel(
     bits = (bytes_2d >> bit_pos) & 1
     mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
 
+    # The compact vals array stores this tile's nonzeros contiguously,
+    # starting at prefix[tile_id].  Use a local prefix-sum (cumsum) over the
+    # bitmask to map each nonzero to its rank within the tile.
     base = tl.load(prefix_ptr + tile_id)
 
     ranks = tl.cumsum(mask_bits, 0) - 1
     v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
 
+    # Reshape the flat result back to [BLOCK_M, BLOCK_K] and write into the
+    # dense batch buffer at the correct (row, col) position.
     v_2d = tl.reshape(v, (BLOCK_M, BLOCK_K))
 
     row_base = row_tile_in_batch * BLOCK_M
@@ -178,6 +236,11 @@ def _dense_matmul_relu_kernel(
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     INPUT_PRECISION: tl.constexpr,
 ):
+    """
+    Standard tiled dense matmul C = relu(A @ B).
+    A is [M, K] row-major, B is [K, N] row-major (W2.T, contiguous).
+    Each program computes one output tile [BLOCK_M x BLOCK_N] and applies ReLU.
+    """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
@@ -207,6 +270,14 @@ def _dense_matmul_relu_kernel(
 
 
 def sp_relu_spAx(vals, meta, W2):
+    """
+    Layer 2: compute y = relu(unpack_sparse(vals, meta) @ W2).
+
+    Processes rows in batches of ROW_BATCH to avoid materializing the
+    full M×K dense intermediate.  For each batch:
+      1. Unpack the batch's sparse tiles into a small dense buffer.
+      2. Run a standard dense matmul + ReLU on that buffer against W2.T.
+    """
     M, K = meta['shape']
     N = W2.shape[0]
     B = W2.T.contiguous()
@@ -226,8 +297,10 @@ def sp_relu_spAx(vals, meta, W2):
         batch_rows = m_end - m_start
         first_m_tile = m_start // BLOCK_M
 
+        # Small dense buffer for just this row batch.
         dense_batch = torch.empty(batch_rows, K, device=B.device, dtype=vals.dtype)
 
+        # 1) Unpack sparse tiles belonging to [m_start : m_end] into dense_batch.
         num_row_tiles_in_batch = triton.cdiv(batch_rows, BLOCK_M)
         num_tiles_in_batch = num_row_tiles_in_batch * grid_n_sparse
 
@@ -240,6 +313,7 @@ def sp_relu_spAx(vals, meta, W2):
             num_warps=8, num_stages=2,
         )
 
+        # 2) Dense matmul on the batch buffer, store into output slice.
         grid = lambda m: (triton.cdiv(batch_rows, m['BLOCK_M']), triton.cdiv(N, m['BLOCK_N']))
         _dense_matmul_relu_kernel[grid](
             dense_batch, B, out[m_start:m_end],
