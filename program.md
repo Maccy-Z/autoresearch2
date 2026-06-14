@@ -25,7 +25,7 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs on a single GPU. You launch it from the repo root as: `python3 {task}/train*.py` (after ensuring the mamba env `optimizer` is active). The train script imports its matching prepare script via a local `sys.path` adjustment, so run it from the repo root — the working directory matters.
+Each experiment runs on a single GPU. You launch it from the repo root as: `python3 {task}/train*.py` (after ensuring the mamba env `optimiser` is active). The train script imports its matching prepare script via a local `sys.path` adjustment, so run it from the repo root — the working directory matters.
 
 **What you CAN do:**
 - Modify `{task}/train*.py` — do not edit prepare.py. Almost everything is fair game, just no cheating.
