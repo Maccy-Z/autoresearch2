@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 import time
 
+from sparse_unpack import bitsparse_unpack
+
 
 def generate_parameters(dim1, dim2, expansion=4, shift=0., seed=1, device="cuda"):
     G = torch.Generator(device=device).manual_seed(seed)
@@ -35,29 +37,46 @@ def dataloader():
             yield W1, W2, x, y
 
 
-def evaluate_kernel(kernel_fn, atol=3e-2, rtol=1e-3):
+def check_out_dict(meta):
+    size = 0
+    for k, v in meta.items():
+        if isinstance(v, torch.Tensor):
+            size += v.nelement() * v.element_size() / 1024**2
+    return size
+
+
+def evaluate_kernel(atol=3e-2, rtol=1e-3):
+    from train import sp_relu_Ax, sp_relu_spAx
     torch.manual_seed(0)
 
     steps = 50
     total_time = 0
     for W1, W2, x, y_true in dataloader():
-        out_shape = [W2.shape[0], x.shape[0]]
 
         for _ in range(10):
-            _ = kernel_fn(W1, W2, x)
+            vals, meta = sp_relu_Ax(W1, x)
+            _ = sp_relu_spAx(vals, meta, W2)
 
         torch.cuda.synchronize()
         start = time.perf_counter()
         for _ in range(steps):
-            y = kernel_fn(W1, W2, x)
+            vals, meta = sp_relu_Ax(W1, x)
+            y = sp_relu_spAx(vals, meta, W2)
 
         torch.cuda.synchronize()
         end = time.perf_counter()
 
         torch.testing.assert_close(y, y_true, atol=atol, rtol=rtol)
 
+        numel = W1.shape[0] * x.shape[0]
+        fill_frac = vals.numel() / numel
+        meta_size = check_out_dict(meta)
+        tot_size = meta_size + vals.numel() * vals.element_size() / 1024**2
+        full_size = numel * vals.element_size() / 1024**2
+        assert tot_size < full_size * fill_frac * 1.1 + 0.02 * tot_size
+
         time_taken = 1000 * (end - start) / steps
-        print(f"Shape {W1.shape}: Time {time_taken:.3g}ms")
+        print(f"Shape {W1.shape}, fill {fill_frac:.3f}: Time {time_taken:.3g}ms")
         total_time += time_taken
 
     print("passed")
@@ -65,9 +84,8 @@ def evaluate_kernel(kernel_fn, atol=3e-2, rtol=1e-3):
 
 
 def run_base():
-    from train import full_relu_matmul
     torch.set_float32_matmul_precision("high")
-    evaluate_kernel(full_relu_matmul)
+    evaluate_kernel()
 
 
 if __name__ == "__main__":

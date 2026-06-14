@@ -5,7 +5,6 @@ sys.path.insert(0, 'full_matmul')
 import torch
 import triton
 import triton.language as tl
-from prepare import evaluate_kernel
 from sparse_pack import _compact_vals_kernel
 from sparse_unpack import bitsparse_unpack
 
@@ -190,16 +189,7 @@ def sp_relu_spAx(vals, meta, W2):
     return out
 
 
-# ---------------------------------------------------------------------------
-# Combined pipeline
-# ---------------------------------------------------------------------------
-
-def full_relu_matmul(W1, W2, x):
-    vals, meta = sp_relu_Ax(W1, x)
-    y = sp_relu_spAx(vals, meta, W2)
-    return y
-
-
 if __name__ == "__main__":
+    from prepare import run_base
     torch.set_float32_matmul_precision("high")
-    evaluate_kernel(full_relu_matmul)
+    run_base()
