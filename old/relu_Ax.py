@@ -94,13 +94,9 @@ class LinearReLUFunction(Function):
         z = input_dense @ weight.t()
         output = F.relu(z)
 
+        ctx.save_for_backward(input, weight, output>0)
         if sparse_out:
             output = BitsparseTensor(output)
-
-            ctx.save_for_backward(input, weight, output)
-        else:
-            ctx.save_for_backward(input, weight, BitsparseTensor(output))
-
         return output
 
     @staticmethod
@@ -115,9 +111,8 @@ class LinearReLUFunction(Function):
             grad_weight = grad_z^T @ input                        # (out, B) @ (B, in) -> (out, in)
         """
         input, weight, output = ctx.saved_tensors
-        output = output.unpack()
 
-        grad_z = grad_output * (output > 0)
+        grad_z = grad_output * output
 
         grad_input = grad_z @ weight
         grad_weight = grad_z.t() @ input
@@ -133,7 +128,7 @@ class Model(nn.Module):
         self.W2 = torch.nn.Parameter(W2.clone())
 
     def forward(self, x: Tensor) -> Tensor:
-        x = LinearReLUFunction.apply(x, self.W1, False)
+        x = LinearReLUFunction.apply(x, self.W1, Tensor)
         print(x)
         x = x @ self.W2.t()
         return x

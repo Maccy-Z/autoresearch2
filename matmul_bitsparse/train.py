@@ -11,11 +11,9 @@ from sparse_pack import _compact_vals_kernel
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_K': 32}, num_warps=4, num_stages=2),
-        triton.Config({'BLOCK_K': 32}, num_warps=8, num_stages=3),
-        triton.Config({'BLOCK_K': 64}, num_warps=4, num_stages=2),
         triton.Config({'BLOCK_K': 64}, num_warps=8, num_stages=3),
-        triton.Config({'BLOCK_K': 64}, num_warps=8, num_stages=4),
         triton.Config({'BLOCK_K': 128}, num_warps=4, num_stages=1),
+        triton.Config({'BLOCK_K': 128}, num_warps=8, num_stages=1),
     ],
     key=['M', 'N', 'K'],
 )
@@ -34,20 +32,22 @@ def _matmul_sparse_kernel(
     pid_n = tl.program_id(1)
     pid = pid_m * tl.num_programs(1) + pid_n
 
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    rk = tl.arange(0, BLOCK_K)
-
-    a_ptrs = A_ptr + rm[:, None] * K + rk[None, :]
-    b_ptrs = B_ptr + rn[:, None] * K + rk[None, :]
+    a_base = tl.make_block_ptr(
+        base=A_ptr, shape=(M, K), strides=(K, 1),
+        offsets=(pid_m * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_K), order=(0, 1),
+    )
+    b_base = tl.make_block_ptr(
+        base=B_ptr, shape=(K, N), strides=(1, K),
+        offsets=(0, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0),
+    )
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
-        a = tl.load(a_ptrs, mask=(rm[:, None] < M) & (k + rk[None, :] < K), other=0.0)
-        b = tl.load(b_ptrs, mask=(rn[:, None] < N) & (k + rk[None, :] < K), other=0.0)
-        acc += tl.dot(a, tl.trans(b), input_precision=INPUT_PRECISION)
-        a_ptrs += BLOCK_K
-        b_ptrs += BLOCK_K
+        a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
+        b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
+        acc += tl.dot(a, b, input_precision=INPUT_PRECISION)
+        a_base = tl.advance(a_base, (0, BLOCK_K))
+        b_base = tl.advance(b_base, (BLOCK_K, 0))
 
     acc = tl.maximum(acc, 0)
 
@@ -68,14 +68,7 @@ def _matmul_sparse_kernel(
 
 
 def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
-    """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata.
-
-    M = batch size (x.shape[0]), N = output features (W1.shape[0]).
-    The output (M x N) is tiled into a grid of BLOCK_M x BLOCK_N tiles.
-    grid_m = ceil(M / BLOCK_M) tiles along the batch (M) dimension.
-    grid_n = ceil(N / BLOCK_N) tiles along the output feature (N) dimension.
-    Each tile is independently processed: matmul → ReLU → extract non-zeros.
-    """
+    """Compute ReLU(W1 @ x.T) and return the non-zero values with sparse metadata."""
     M, K = x.shape
     N = W1.shape[0]
 
@@ -88,7 +81,7 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
 
     tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
-    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=x.device, dtype=x.dtype)
+    tile_scratch = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
 
     grid = lambda meta: (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     _matmul_sparse_kernel[grid](
@@ -103,7 +96,6 @@ def sparse_relu_Ax(W1, x, BLOCK_M=128, BLOCK_N=128, input_precision="tf32"):
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
-    # Host sync required, no way around this.
     total_nnz = tile_prefix[-1].item()
     vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
