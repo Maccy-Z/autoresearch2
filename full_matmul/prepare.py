@@ -36,17 +36,17 @@ def check_out_dict(meta):
 
 
 def evaluate_step(rows, shift, G):
-    from train import sp_relu_Ax, sp_relu_spAx
+    from train import sp_relu_Ax, relu_spAx
     atol = 2e-2
     rtol = 1e-3
     n_tests = 15
-    dtype = torch.float32
+    dtype = torch.bfloat16
 
     # Warmup
     W1, W2, x = generate_parameters(rows, G, shift=shift, dtype=dtype)
     for _ in range(5):
         vals, meta = sp_relu_Ax(W1, x)
-        _ = sp_relu_spAx(vals, meta, W2)
+        _ = relu_spAx(vals, meta, W2)
     del W1, W2, x
     gc.collect()
     torch.cuda.empty_cache()
@@ -75,7 +75,7 @@ def evaluate_step(rows, shift, G):
         vals, meta = intermediates[i]
         _, W2, _ = datasets[i]
 
-        y = sp_relu_spAx(vals, meta, W2)
+        y = relu_spAx(vals, meta, W2)
         preds.append(y)
     torch.cuda.synchronize()
     end2 = time.perf_counter()
