@@ -37,17 +37,17 @@ def _matmul_sparse_kernel(
         offsets=(pid_m * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_K), order=(0, 1),
     )
     b_base = tl.make_block_ptr(
-        base=B_ptr, shape=(N, K), strides=(K, 1),
-        offsets=(pid_n * BLOCK_N, 0), block_shape=(BLOCK_N, BLOCK_K), order=(0, 1),
+        base=B_ptr, shape=(K, N), strides=(1, K),
+        offsets=(0, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0),
     )
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_K):
         a = tl.load(a_base, boundary_check=(0, 1), padding_option="zero")
         b = tl.load(b_base, boundary_check=(0, 1), padding_option="zero")
-        acc += tl.dot(a, tl.trans(b), input_precision=INPUT_PRECISION)
+        acc += tl.dot(a, b, input_precision=INPUT_PRECISION)
         a_base = tl.advance(a_base, (0, BLOCK_K))
-        b_base = tl.advance(b_base, (0, BLOCK_K))
+        b_base = tl.advance(b_base, (BLOCK_K, 0))
 
     acc = tl.maximum(acc, 0)
 
