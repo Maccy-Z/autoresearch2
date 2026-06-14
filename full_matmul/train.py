@@ -313,6 +313,7 @@ def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
 
     use_triton = W2.dtype == torch.float32
     out = torch.empty(M, N, device=W2.device, dtype=torch.float32 if use_triton else W2.dtype)
+    B = W2.T.contiguous()
 
     for m_start in range(0, M, ROW_BATCH):
         m_end = min(m_start + ROW_BATCH, M)
@@ -336,7 +337,7 @@ def sp_relu_spAx(vals, meta, W2, input_precision="tf32"):
         if use_triton:
             grid = lambda m: (triton.cdiv(batch_rows, m['BLOCK_M']), triton.cdiv(N, m['BLOCK_N']))
             _dense_matmul_relu_kernel[grid](
-                dense_batch, W2.T.contiguous(), out[m_start:m_end],
+                dense_batch, B, out[m_start:m_end],
                 batch_rows, N, K,
                 BLOCK_M=BLOCK_M,
                 INPUT_PRECISION=input_precision,
