@@ -217,7 +217,7 @@ def sp_relu_spAx(vals, meta, W2):
     TILE_BYTES = TILE_NUMEL // 8
 
     grid_n_sparse = meta['grid_n']
-    ROW_BATCH = 1024
+    ROW_BATCH = 2048
 
     out = torch.empty(M, N, device=B.device, dtype=torch.float32)
 
