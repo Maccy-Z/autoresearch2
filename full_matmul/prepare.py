@@ -34,13 +34,13 @@ def check_out_dict(meta):
             size += v.nelement() * v.element_size() / 1024**2
     return size
 
-
+@torch.no_grad()
 def evaluate_step(rows, shift, G):
     from train import sp_relu_Ax, relu_spAx
-    atol = 2e-2
+    atol = 1e-2
     rtol = 1e-3
     n_tests = 15
-    dtype = torch.bfloat16
+    dtype = torch.float32
 
     # Warmup
     W1, W2, x = generate_parameters(rows, G, shift=shift, dtype=dtype)
