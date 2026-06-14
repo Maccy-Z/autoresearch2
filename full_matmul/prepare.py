@@ -70,6 +70,7 @@ def evaluate_kernel():
 
         torch.testing.assert_close(y, y_true, atol=atol, rtol=rtol)
 
+        # Make sure sparsity is high enough.
         numel = W1.shape[0] * x.shape[0]
         fill_frac = vals.numel() / numel
         meta_size = check_out_dict(meta)
