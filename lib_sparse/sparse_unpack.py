@@ -1,0 +1,54 @@
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _unpack_batch_kernel(
+    vals_ptr, bitmask_ptr, prefix_ptr,
+    dense_ptr,
+    first_m_tile, grid_n_sparse, K, batch_rows,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    """
+    Each program unpacks ONE sparse tile [BLOCK_M x BLOCK_N] from the
+    compact representation and scatters it into the dense output buffer.
+
+    Grid layout: (num_row_tiles_in_batch * grid_n_sparse,) flat,
+    where pid // grid_n_sparse picks the row-tile within the batch
+    and  pid % grid_n_sparse picks the K-tile.
+    """
+    pid = tl.program_id(0)
+    row_tile_in_batch = pid // grid_n_sparse
+    k_tile = pid % grid_n_sparse
+
+    orig_row_tile = first_m_tile + row_tile_in_batch
+    tile_id = orig_row_tile * grid_n_sparse + k_tile
+
+    # Read the packed uint8 bitmask and unpack into a [TILE_NUMEL] bool mask.
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    bit_pos = tl.arange(0, 8)[None, :]
+    bits = (bytes_2d >> bit_pos) & 1
+    mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
+
+    # The compact vals array stores this tile's nonzeros contiguously,
+    # starting at prefix[tile_id].  Use a local prefix-sum (cumsum) over the
+    # bitmask to map each nonzero to its rank within the tile.
+    base = tl.load(prefix_ptr + tile_id)
+
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
+
+    # Reshape the flat result back to [BLOCK_M, BLOCK_N] and write into the
+    # dense batch buffer at the correct (row, col) position.
+    v_2d = tl.reshape(v, (BLOCK_M, BLOCK_N))
+
+    row_base = row_tile_in_batch * BLOCK_M
+    offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
+    offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+    offs = offs_m * K + offs_k
+    tl.store(dense_ptr + offs, v_2d, mask=offs_m < batch_rows)
+

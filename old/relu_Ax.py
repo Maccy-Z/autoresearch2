@@ -107,12 +107,12 @@ class LinearReLUFunction(Function):
 
         Backward:
             grad_z = grad_output * (z > 0)                       # relu mask
-            grad_input  = grad_z @ W                              # (B, out) @ (out, in) -> (B, in)
+            grad_input = grad_z @ W                              # (B, out) @ (out, in) -> (B, in)
             grad_weight = grad_z^T @ input                        # (out, B) @ (B, in) -> (out, in)
         """
-        input, weight, output = ctx.saved_tensors
+        input, weight, relu_grad = ctx.saved_tensors
 
-        grad_z = grad_output * output
+        grad_z = grad_output * relu_grad
 
         grad_input = grad_z @ weight
         grad_weight = grad_z.t() @ input
