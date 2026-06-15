@@ -15,11 +15,8 @@ A dense 2D tensor [M, N] is partitioned into a grid of tiles, each
   prefix   — int32 prefix sum of per-tile nonzero counts: prefix[i] is
              the starting offset of tile i's values inside vals.
              prefix[num_tiles] equals len(vals).
-
-The (vals, meta) pair returned by dense_to_tilesparse is consumed by
-bitsparse_unpack in matmul_bitsparse/sparse_unpack.py.
 """
-import torch
+
 import triton
 import triton.language as tl
 
@@ -92,55 +89,4 @@ def _compact_vals_kernel(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128):
-    """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
-    Returns (vals, meta) where meta is a dict with keys:
-      bitmask, prefix, grid_m, grid_n, BLOCK_M, BLOCK_N
-    """
-    M, N = dense.shape
-
-    TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-
-    grid_m = triton.cdiv(M, BLOCK_M)
-    grid_n = triton.cdiv(N, BLOCK_N)
-    num_tiles = grid_m * grid_n
-
-    # --- launch: tile pack (bitmask + counts + dense scratch) ---
-    tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
-    tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
-    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=dense.device, dtype=dense.dtype)
-
-    _tile_pack_kernel[(grid_m, grid_n)](
-        dense, tile_counts, tile_bitmasks, tile_scratch,
-        M, N,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
-    )
-
-    # --- host: exclusive prefix sum over per-tile counts ---
-    tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
-    torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
-    tile_prefix[0] = 0
-
-    total_nnz = tile_prefix[-1].item()
-
-    # --- launch: compact nonzeros into contiguous vals ---
-    vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
-    _compact_vals_kernel[(num_tiles,)](
-        tile_scratch, tile_prefix, vals,
-        TILE_NUMEL=TILE_NUMEL,
-        num_warps=8, num_stages=2,
-    )
-
-    meta = {
-        'bitmask': tile_bitmasks,
-        'prefix': tile_prefix,
-        'grid_m': grid_m,
-        'grid_n': grid_n,
-        'BLOCK_M': BLOCK_M,
-        'BLOCK_N': BLOCK_N,
-    }
-    return vals, meta

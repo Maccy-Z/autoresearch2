@@ -2,21 +2,21 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn.functional as F
 
-
-from sparse_pack import _compact_vals_kernel, _tile_pack_kernel
+from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
 from sparse_unpack import _unpack_batch_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
 
+
 class BitsparseTensor(torch.Tensor):
-    """ Bitmask sparse tensor. """
-    vals: Tensor            # Nonzero values
-    bitmask: Tensor         # Bitmask of nonzero values.
-    prefix: Tensor          # Int32 tensor of where each block starts in the vals array.
-    BLOCK_M: int            # Size of each tile [M, N]
+    """Bitmask sparse tensor."""
+    vals: Tensor
+    bitmask: Tensor
+    prefix: Tensor
+    BLOCK_M: int
     BLOCK_N: int
-    grid_m: int             # Number of tiles in [M, N] dimensions. grid_m = ceil[M/BLOCK_M]
+    grid_m: int
     grid_n: int
 
     @staticmethod
@@ -30,8 +30,8 @@ class BitsparseTensor(torch.Tensor):
         )
 
     def __init__(self, vals: Tensor, bitmask: Tensor, prefix: Tensor,
-                grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
-                shape, dtype, device):
+                 grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
+                 shape, dtype, device):
         super().__init__()
         self.vals = vals
         self.bitmask = bitmask
@@ -75,30 +75,14 @@ class BitsparseTensor(torch.Tensor):
 
         raise NotImplementedError
 
-# ---------------------------------------------------------------------------
-# Layer 1: x @ W1.T, then ReLU, then sparsify into a compact per-tile
-# bitmask format for low-memory storage between layers.
-#
-# The matmul is done with torch.nn.functional.linear so it matches the
-# reference precision regardless of dtype (bfloat16, float32, etc.).
-# Triton kernels handle only the tile-based sparsification and compaction.
-# ---------------------------------------------------------------------------
 
-def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
+def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
+    """Pack a dense 2D tensor into the per-tile compressed sparse format.
+
+    Returns a BitsparseTensor.
     """
-    y = relu(x @ W.T), then pack into a compact per-tile
-    sparse representation.
+    M, N = dense.shape
 
-    Returns a BitsparseTensor containing:
-    """
-
-    M, K = x.shape
-    N = W.shape[0]
-
-    # Do matmul as normal
-    y1 = F.relu(F.linear(x, W))
-
-    # Pack into sparse tensor
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
@@ -106,26 +90,28 @@ def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTenso
     grid_n = (N + BLOCK_N - 1) // BLOCK_N
     num_tiles = grid_m * grid_n
 
-    tile_counts = torch.empty(num_tiles, device=x.device, dtype=torch.int32)
-    tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=x.device, dtype=torch.uint8)
-    tile_scratch = torch.empty(num_tiles * TILE_NUMEL, device=x.device, dtype=x.dtype)
+    # --- launch: tile pack (bitmask + counts + dense scratch) ---
+    tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
+    tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
+    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=dense.device, dtype=dense.dtype)
 
     _tile_pack_kernel[(grid_m, grid_n)](
-        y1, tile_counts, tile_bitmasks, tile_scratch,
+        dense, tile_counts, tile_bitmasks, tile_scratch,
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
         num_warps=4, num_stages=2,
     )
 
-    tile_prefix = torch.empty(num_tiles + 1, device=x.device, dtype=torch.int32)
+    # --- host: exclusive prefix sum over per-tile counts ---
+    tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
-    # This requires a GPU-CPU sync to know the size to allocate.
     total_nnz = tile_prefix[-1].item()
-    vals = torch.empty(total_nnz, device=x.device, dtype=x.dtype)
 
+    # --- launch: compact nonzeros into contiguous vals ---
+    vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
     _compact_vals_kernel[(num_tiles,)](
         tile_scratch, tile_prefix, vals,
         TILE_NUMEL=TILE_NUMEL,
@@ -135,21 +121,29 @@ def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTenso
     return BitsparseTensor(
         vals, tile_bitmasks, tile_prefix,
         grid_m, grid_n, BLOCK_M, BLOCK_N,
-        (M, N), x.dtype, x.device,
+        dense.shape, dense.dtype, dense.device,
     )
 
 
-# ---------------------------------------------------------------------------
-# Layer 2: relu(sparse_A @ W2)
-#
-# Unpacks the compact sparse representation into batched dense row-blocks,
-# then uses torch.nn.functional.linear for the matmul + ReLU.  ROW_BATCH
-# controls the peak temporary memory (ROW_BATCH * K elements).
-# ---------------------------------------------------------------------------
-
-def spAx(x_sparse: BitsparseTensor, W: Tensor):
+def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """
-    y = relu(sparse_x @ W2).
+    y = relu(x @ W.T), then pack into a compact per-tile
+    sparse representation.
+
+    Returns a BitsparseTensor:
+    """
+
+    # Do matmul as normal
+    y1 = F.relu(F.linear(x, W))
+
+    return dense_to_tilesparse(y1, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N)
+
+
+def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
+    """
+    y = relu(sparse_x @ W).
+    x.shape = [M, N]
+    W.shape = [N, K]
 
     Unpacks the sparse representation into dense row-batches, then uses
     F.linear for the matmul and ReLU.
@@ -159,16 +153,17 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor):
     bitmask = x_sparse.bitmask
     prefix = x_sparse.prefix
     BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
-    grid_m, grid_n = x_sparse.grid_m, x_sparse.grid_n
+    _, grid_n = x_sparse.grid_m, x_sparse.grid_n
     M, N = x_sparse.shape
     N = W.shape[0]
+    K = W.shape[1]
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
     ROW_BATCH = 2048
 
-    out = torch.empty(M, N, device=W.device, dtype=W.dtype)
+    out = torch.empty(M, K, device=W.device, dtype=W.dtype)
 
     for m_start in range(0, M, ROW_BATCH):
         m_end = min(m_start + ROW_BATCH, M)
@@ -193,7 +188,6 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor):
         out[m_start:m_end].copy_(batch_out)
 
     return out
-
 
 
 def main():
