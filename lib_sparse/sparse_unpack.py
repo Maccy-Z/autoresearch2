@@ -10,7 +10,6 @@ def _unpack_batch_kernel(
     first_m_tile, grid_n_sparse, K, batch_rows,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
-    SQUARE: tl.constexpr,
 ):
     pid = tl.program_id(0)
     row_tile_in_batch = pid // grid_n_sparse
@@ -32,8 +31,6 @@ def _unpack_batch_kernel(
 
     ranks = tl.cumsum(mask_bits, 0) - 1
     v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
-    if SQUARE:
-        v = v * v
 
     v_2d = tl.reshape(v, (BLOCK_M, BLOCK_N))
 
@@ -42,6 +39,20 @@ def _unpack_batch_kernel(
     offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
     offs = offs_m * K + offs_k
     tl.store(dense_ptr + offs, v_2d, mask=offs_m < batch_rows)
+
+
+@triton.jit
+def _square_dense_kernel(
+    dense_ptr, M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    v = tl.load(dense_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+    tl.store(dense_ptr + offs, v * v, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
 
 @triton.jit

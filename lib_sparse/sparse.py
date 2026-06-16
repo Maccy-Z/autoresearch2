@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
+from sparse_unpack import _unpack_batch_kernel, _square_dense_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -241,9 +241,15 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        SQUARE=square,
         num_warps=4, num_stages=2,
     )
+
+    if square:
+        _square_dense_kernel[(grid_m, grid_n)](
+            dense, M, N,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            num_warps=4, num_stages=2,
+        )
 
     return W @ dense
 
