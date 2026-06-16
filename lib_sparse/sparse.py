@@ -20,7 +20,6 @@ class BitsparseTensor(torch.Tensor):
     grid_n: int
 
     @staticmethod
-    @torch.compiler.disable
     def __new__(cls, vals: Tensor, bitmask: Tensor, prefix: Tensor,
                 grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
                 shape, dtype, device):
@@ -86,7 +85,7 @@ class BitsparseTensor(torch.Tensor):
         return 1 - self.vals.numel() / self.numel()
 
 
-@torch.compiler.disable
+# @torch.compiler.disable
 def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
@@ -118,7 +117,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
-    total_nnz = tile_prefix[-1].item()
+    total_nnz = tile_prefix[-1]#.item()
 
     # --- launch: compact nonzeros into contiguous vals ---
     vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
@@ -135,9 +134,6 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
         grid_m, grid_n, BLOCK_M, BLOCK_N,
         dense.shape, dense.dtype, dense.device,
     )
-
-
-
 
 
 def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
@@ -204,7 +200,6 @@ class FFNSparse(Function):
         """
         preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
         z = F.relu(preact)
-
         output = z @ W2.T           # shape = [BS, dim]
 
         z_sparse = dense_to_tilesparse(z)

@@ -1,10 +1,10 @@
 from torch.autograd import Function
 import torch.nn.functional as F
+import torch
 
-
-class FFNv1(Function):
+class FFNv1:
     @staticmethod
-    def forward(ctx, x, W1, W2):
+    def apply(x, W1, W2):
         """
         out = relu(x @ W1.T) @ W2.T
 
@@ -19,27 +19,31 @@ class FFNv1(Function):
         z = F.relu(preact)
         output = z @ W2.T           # shape = [BS, dim]
 
-        ctx.save_for_backward(x, W1, W2, preact, z)
         return output
 
+
+class FFNckpt:
     @staticmethod
-    def backward(ctx, grad_output):
-        x, W1, W2, preact, z = ctx.saved_tensors
+    def apply(x, W1, W2):
+        return torch.utils.checkpoint.checkpoint(FFNckpt.forward, x, W1, W2, use_reentrant=False)
 
-        # output = z @ W2.T
-        # grad_output.shape = [BS, dim]
+    @staticmethod
+    def forward(x, W1, W2):
+        """
+        out = relu(x @ W1.T) @ W2.T
 
-        grad_z = grad_output @ W2          # [BS, exp_fact*in_dim]
-        grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
+        x.shape = [BS, dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
 
-        # z = relu(preact)
-        grad_preact = grad_z * (preact>0)
+        returns:
+            output: (BS, dim)
+        """
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        z = F.relu(preact)
+        output = z @ W2.T           # shape = [BS, dim]
 
-        # preact = x @ W1.T
-        grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
-
-        return grad_x, grad_W1, grad_W2
+        return output
 
 
 class FFNv2(Function):
