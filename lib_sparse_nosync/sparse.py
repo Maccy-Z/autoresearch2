@@ -132,7 +132,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
-    total_nnz = M * N  # tile_prefix[-1].item()
+    total_nnz = tile_prefix[-1].item()
 
     # --- launch: compact nonzeros into contiguous vals ---
     vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)

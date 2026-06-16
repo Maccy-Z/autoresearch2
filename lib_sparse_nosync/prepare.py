@@ -101,7 +101,7 @@ def evaluate(x, dtype):
 def run_base():
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    torch._functorch.config.activation_memory_budget = 0.5
+    # torch._functorch.config.activation_memory_budget = 0.5
 
     hdim = 4096
     bs = 10_000
