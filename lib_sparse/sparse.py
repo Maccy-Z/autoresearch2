@@ -127,7 +127,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> Bitspar
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
     return BitsparseTensor(
@@ -182,7 +182,7 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
+        num_warps=16, num_stages=2,
     )
 
     return W @ dense
