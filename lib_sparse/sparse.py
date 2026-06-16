@@ -19,7 +19,6 @@ class BitsparseTensor:
     grid_m: int
     grid_n: int
 
-
     def __init__(self, vals: Tensor, bitmask: Tensor, prefix: Tensor,
                  grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
                  shape, dtype, device):
@@ -36,36 +35,6 @@ class BitsparseTensor:
     def __repr__(self):
         return (f"BitsparseTensor(shape={list(self.shape)}, device={self.device}, "
                 f"nnz={self.vals.numel()}, requires_grad={self.requires_grad})\n")
-
-    # @classmethod
-    # def _from_parts(cls, sparse):
-    #     # Create clone of tensor, used for .detach(), .clone() etc. Bypasses normal user-facing construction logic.
-    #     obj = torch.Tensor._make_wrapper_subclass(
-    #         cls,
-    #         sparse.shape,
-    #         strides=sparse.stride(),
-    #         storage_offset=sparse.storage_offset(),
-    #         dtype=sparse.dtype,
-    #         layout=sparse.layout,
-    #         device=sparse.device,
-    #         requires_grad=sparse.requires_grad,
-    #     )
-    #     obj.vals = sparse.vals
-    #     obj.bitmask = sparse.bitmask
-    #     obj.prefix = sparse.prefix
-    #     obj.grid_m = sparse.grid_m
-    #     obj.grid_n = sparse.grid_n
-    #     obj.BLOCK_M = sparse.BLOCK_M
-    #     obj.BLOCK_N = sparse.BLOCK_N
-    #     return obj
-    #
-    # @classmethod
-    # def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-    #     if func is torch.ops.aten.detach.default:
-    #         self = args[0]
-    #         return BitsparseTensor._from_parts(self)
-    #
-    #     raise NotImplementedError
 
     def vram_size(self):
         val_size = self.vals.element_size() * self.vals.nelement()
