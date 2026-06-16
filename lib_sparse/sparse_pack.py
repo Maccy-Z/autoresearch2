@@ -29,7 +29,6 @@ def _tile_pack_kernel(
     dense_ptr,
     tile_counts_ptr,
     tile_bitmasks_ptr,
-    tile_scratch_ptr,
     M, N,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
@@ -58,9 +57,6 @@ def _tile_pack_kernel(
     nnz = tl.sum(nz.to(tl.int32))
     tl.store(tile_counts_ptr + pid, nnz)
 
-    # keep a dense copy of the tile for the compaction pass below
-    tl.store(tile_scratch_ptr + pid * TILE_NUMEL + tl.arange(0, TILE_NUMEL), tile_flat)
-
 
 # ---------------------------------------------------------------------------
 # Kernel 2 — compact: scatter each tile's nonzeros into a single contiguous
@@ -68,17 +64,25 @@ def _tile_pack_kernel(
 # ---------------------------------------------------------------------------
 @triton.jit
 def _compact_vals_kernel(
-    tile_scratch_ptr,
+    dense_ptr,
     tile_prefix_ptr,
     vals_out_ptr,
+    M, N, grid_n,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr,
 ):
     pid = tl.program_id(0)
     base = tl.load(tile_prefix_ptr + pid)          # offset of this tile in vals_out
 
-    # reload the dense tile from scratch and re-derive the nonzero mask
-    offs = tl.arange(0, TILE_NUMEL)
-    v = tl.load(tile_scratch_ptr + pid * TILE_NUMEL + offs)
+    tile_m = pid // grid_n
+    tile_n = pid % grid_n
+
+    rm = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = tile_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    v_2d = tl.load(dense_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+    v = tl.reshape(v_2d, (TILE_NUMEL,))
+
     nz = (v > 0.0).to(tl.int32)
 
     # local rank of each nonzero within the tile → global position in vals_out

@@ -101,13 +101,12 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> Bitspa
     grid_n = (N + BLOCK_N - 1) // BLOCK_N
     num_tiles = grid_m * grid_n
 
-    # --- launch: tile pack (bitmask + counts + dense scratch) ---
+    # --- launch: tile pack (bitmask + counts) ---
     tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
-    tile_scratch = torch.empty(num_tiles, TILE_NUMEL, device=dense.device, dtype=dense.dtype)
 
     _tile_pack_kernel[(grid_m, grid_n)](
-        dense, tile_counts, tile_bitmasks, tile_scratch,
+        dense, tile_counts, tile_bitmasks,
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
@@ -124,7 +123,9 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> Bitspa
     # --- launch: compact nonzeros into contiguous vals ---
     vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
     _compact_vals_kernel[(num_tiles,)](
-        tile_scratch, tile_prefix, vals,
+        dense, tile_prefix, vals,
+        M, N, grid_n,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
         num_warps=8, num_stages=2,
     )
