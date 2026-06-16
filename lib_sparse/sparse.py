@@ -87,7 +87,7 @@ class BitsparseTensor(torch.Tensor):
 
 
 @torch.compiler.disable
-def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> BitsparseTensor:
+def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
     Returns a BitsparseTensor.
@@ -127,7 +127,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> Bitspar
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=4, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return BitsparseTensor(
@@ -140,7 +140,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> Bitspar
 
 
 
-def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=64, BLOCK_N=128) -> BitsparseTensor:
+def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """
     y = relu(x @ W.T), then pack into a compact per-tile
     sparse representation.
@@ -182,7 +182,7 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=16, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return W @ dense
@@ -230,7 +230,7 @@ class FFNSparse(Function):
             z_sparse.shape[0], z_sparse.shape[1],
             BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
             TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-            num_warps=4, num_stages=2,
+            num_warps=8, num_stages=2,
         )
         grad_preact = grad_z
 
