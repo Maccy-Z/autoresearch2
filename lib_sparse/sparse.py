@@ -194,7 +194,7 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
-    ROW_BATCH = 2048
+    ROW_BATCH = 5000
 
     out = torch.zeros(K, N, device=W.device, dtype=W.dtype)
 
