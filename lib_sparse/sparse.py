@@ -87,7 +87,7 @@ class BitsparseTensor(torch.Tensor):
 
 
 @torch.compiler.disable
-def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
+def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
     Returns a BitsparseTensor.
@@ -158,7 +158,7 @@ def unpack_bitmask_to_bool(sparse: BitsparseTensor) -> torch.Tensor:
     return dense_mask[:M, :N]
 
 
-def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
+def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=64, BLOCK_N=128) -> BitsparseTensor:
     """
     y = relu(x @ W.T), then pack into a compact per-tile
     sparse representation.
