@@ -91,7 +91,7 @@ def evaluate(x, dtype):
     torch.testing.assert_close(loss_dn, loss)
     torch.testing.assert_close(grad_stds_dn, grad_stds)
     # make sure vram has been reduced
-    assert vram < vram_dn, f"VRAM usage not reduced: {vram:.2f} MB >= {vram_dn:.2f} MB"
+    assert vram < vram_dn*0.9, f"VRAM usage not reduced enough: {vram:.2f} MB >= {vram_dn:.2f} MB"
 
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
