@@ -222,17 +222,17 @@ class FFNSparse(Function):
         grad_z = grad_output @ W2                   # [BS, exp_fact*in_dim]
         grad_W2 = spAx(z_sparse, grad_output.T)      # [dim, exp_fact*in_dim]
 
-        # z = relu(preact) — apply mask directly via bitmask kernel
+        # z = relu(preact) — apply mask directly via bitmask kernel (in-place on grad_z)
         TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
         TILE_BYTES = TILE_NUMEL // 8
-        grad_preact = torch.empty_like(grad_z)
         _mask_with_bitmask_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
-            grad_z, z_sparse.bitmask, grad_preact,
+            grad_z, z_sparse.bitmask, grad_z,
             z_sparse.shape[0], z_sparse.shape[1],
             BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
             TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
             num_warps=4, num_stages=2,
         )
+        grad_preact = grad_z
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]
