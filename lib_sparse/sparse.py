@@ -152,7 +152,7 @@ class FFNSpRelu2(Function):
         )
         grad_preact = grad_z
 
-        grad_W2 = spAx_squared(z_sparse, grad_output.T)
+        grad_W2 = spAx(z_sparse, grad_output.T, square=True)
 
         grad_x = grad_preact @ W1
         grad_W1 = grad_preact.T @ x
@@ -215,9 +215,9 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     )
 
 
-def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
+def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
     """
-    y = W @ sparse_x.
+    y = W @ sparse_x.  If square=True, uses sparse_x^2 instead.
     x.shape = [M, N]
     W.shape = [K, M]
     """
@@ -241,32 +241,9 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        SQUARE=False,
+        SQUARE=square,
         num_warps=4, num_stages=2,
     )
 
-    return W @ dense
-
-
-def spAx_squared(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
-    """y = W @ (sparse_x)^2. Squares during unpack."""
-    vals = x_sparse.vals
-    bitmask = x_sparse.bitmask
-    prefix = x_sparse.prefix
-    BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
-    grid_m, grid_n = x_sparse.grid_m, x_sparse.grid_n
-    M, N = x_sparse.shape
-    TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-    num_tiles = grid_m * grid_n
-    dense = torch.empty(M, N, device=W.device, dtype=vals.dtype)
-    _unpack_batch_kernel[(num_tiles,)](
-        vals, bitmask, prefix, x_sparse.vals_offset,
-        dense, 0, grid_n, N, M,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        SQUARE=True,
-        num_warps=4, num_stages=2,
-    )
     return W @ dense
 
