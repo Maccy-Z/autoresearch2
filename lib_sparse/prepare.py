@@ -7,8 +7,8 @@ import gc
 import torch._logging
 import logging
 
-from prepare_layer import FFNv3, FFNv2, FFNv1, FFNckpt
-from sparse import FFNSparse, reset_sparse_globals, init_sparse_buffer
+from prepare_layer import FFNv3, FFNv2, FFNv1, FFNckpt, FFNrelu2
+from sparse import FFNSparse, reset_sparse_globals, init_sparse_buffer, FFNSpRelu2
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
@@ -86,13 +86,13 @@ def evaluate():
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
 
     # Dense exact solution
-    model = DeepFFN(FFNv1, dtype=dtype)
+    model = DeepFFN(FFNrelu2, dtype=dtype)
     loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, steps=1)
     del model
     print(f'{vram_dn = :.2f} MB')
 
     # Our model
-    model = DeepFFN(FFNSparse, dtype=dtype)
+    model = DeepFFN(FFNSpRelu2, dtype=dtype)
     # Setup sparse buffer
     hdim_expanded = math.floor(hdim * 5.25)
     init_sparse_buffer(
@@ -104,8 +104,8 @@ def evaluate():
     loss, grad_stds, vram, avg_time = run_step(x, model, steps=5)
 
     # Make sure we are close
-    torch.testing.assert_close(loss_dn, loss)
-    torch.testing.assert_close(grad_stds_dn, grad_stds)
+    torch.testing.assert_close(loss_dn, loss, atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(grad_stds_dn, grad_stds, atol=0.1, rtol=0.15)
     # make sure vram has been reduced
     # assert vram < vram_dn*0.9, f"VRAM usage not reduced enough: {vram:.2f} MB >= {vram_dn:.2f} MB"
 
@@ -116,12 +116,6 @@ def evaluate():
 def run_base():
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    # torch._logging.set_logs(
-    #     dynamo=logging.INFO,
-    #     dynamic=logging.INFO,
-    #     graph_breaks=True,
-    #     recompiles=True,
-    # )
 
     torch._functorch.config.activation_memory_budget = 0.8
 

@@ -2,6 +2,27 @@ from torch.autograd import Function
 import torch.nn.functional as F
 import torch
 
+
+class FFNrelu2:
+    @staticmethod
+    def apply(x, W1, W2):
+        """
+        out = relu(x @ W1.T) @ W2.T
+
+        x.shape = [BS, dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
+
+        returns:
+            output: (BS, dim)
+        """
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        z = F.relu(preact)**2
+        output = z @ W2.T           # shape = [BS, dim]
+
+        return output
+
+
 class FFNv1:
     @staticmethod
     def apply(x, W1, W2):

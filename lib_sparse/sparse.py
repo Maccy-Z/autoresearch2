@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel
+from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -118,6 +118,48 @@ class FFNSparse(Function):
         return grad_x, grad_W1, grad_W2
 
 
+class FFNSpRelu2(Function):
+    """ Sparse feedforward layer with relu² activation """
+    @staticmethod
+    def forward(ctx, x, W1, W2):
+        preact = x @ W1.T
+        z = F.relu(preact)
+        output = (z ** 2) @ W2.T
+
+        z_sparse = dense_to_tilesparse(z)
+
+        ctx.save_for_backward(x, W1, W2)
+        ctx.z_sparse = z_sparse
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, W1, W2 = ctx.saved_tensors
+        z_sparse = ctx.z_sparse
+        ctx.z_sparse = None
+
+        grad_z = grad_output @ W2
+
+        # grad_preact = grad_z * (2 * z) + square vals in-place for spAx
+        _grad_relu2_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
+            grad_z, z_sparse.vals, z_sparse.bitmask, z_sparse.prefix,
+            z_sparse.vals_offset,
+            z_sparse.shape[0], z_sparse.shape[1],
+            BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
+            TILE_NUMEL=z_sparse.BLOCK_M * z_sparse.BLOCK_N,
+            TILE_BYTES=z_sparse.BLOCK_M * z_sparse.BLOCK_N // 8,
+            num_warps=4, num_stages=2,
+        )
+        grad_preact = grad_z
+
+        grad_W2 = spAx(z_sparse, grad_output.T)
+
+        grad_x = grad_preact @ W1
+        grad_W1 = grad_preact.T @ x
+
+        return grad_x, grad_W1, grad_W2
+
+
 def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
@@ -203,3 +245,5 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     )
 
     return W @ dense
+
+
