@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel
+from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -137,25 +137,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=128) -> Bitspar
     )
 
 
-def unpack_bitmask_to_bool(sparse: BitsparseTensor) -> torch.Tensor:
-    """
-    Unpack a packed tile bitmask into a dense [M, N] boolean tensor.
-    """
-    bitmask = sparse.bitmask
-    M, N = sparse.shape
-    grid_m, grid_n = sparse.grid_m, sparse.grid_n
-    BLOCK_M, BLOCK_N = sparse.BLOCK_M, sparse.BLOCK_N
-    tile_numel = BLOCK_M * BLOCK_N
-    tile_bytes = tile_numel // 8
-    num_tiles = grid_m * grid_n
 
-    packed = bitmask.reshape(num_tiles, tile_bytes).to(torch.int16)
-    bit_pos = torch.arange(8, device=bitmask.device, dtype=torch.int16)
-    bits = ((packed.unsqueeze(-1) >> bit_pos) & 1).to(torch.bool)
-
-    tiles = bits.reshape(grid_m, grid_n, BLOCK_M, BLOCK_N)
-    dense_mask = tiles.permute(0, 2, 1, 3).reshape(grid_m * BLOCK_M, grid_n * BLOCK_N)
-    return dense_mask[:M, :N]
 
 
 def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=64, BLOCK_N=128) -> BitsparseTensor:
@@ -240,9 +222,17 @@ class FFNSparse(Function):
         grad_z = grad_output @ W2                   # [BS, exp_fact*in_dim]
         grad_W2 = spAx(z_sparse, grad_output.T)      # [dim, exp_fact*in_dim]
 
-        # z = relu(preact)
-        relu_grad = unpack_bitmask_to_bool(z_sparse)
-        grad_preact = grad_z * relu_grad
+        # z = relu(preact) — apply mask directly via bitmask kernel
+        TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
+        TILE_BYTES = TILE_NUMEL // 8
+        grad_preact = torch.empty_like(grad_z)
+        _mask_with_bitmask_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
+            grad_z, z_sparse.bitmask, grad_preact,
+            z_sparse.shape[0], z_sparse.shape[1],
+            BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+            num_warps=4, num_stages=2,
+        )
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]

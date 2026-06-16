@@ -52,3 +52,32 @@ def _unpack_batch_kernel(
     offs = offs_m * K + offs_k
     tl.store(dense_ptr + offs, v_2d, mask=offs_m < batch_rows)
 
+
+@triton.jit
+def _mask_with_bitmask_kernel(
+    grad_ptr, bitmask_ptr, out_ptr,
+    M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    grid_n = tl.num_programs(1)
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    gz = tl.load(grad_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+
+    tile_id = pid_m * grid_n + pid_n
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    bit_pos = tl.arange(0, 8)[None, :]
+    bits = tl.reshape((bytes_2d >> bit_pos) & 1, (BLOCK_M, BLOCK_N))
+
+    masked = tl.where(bits != 0, gz, 0.0)
+
+    tl.store(out_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
