@@ -146,7 +146,7 @@ class FFNSparse(Function):
         output = z @ W2.T           # shape = [BS, dim]
 
         z_sparse = dense_to_tilesparse(z)
-        # print(f'{z_sparse.sparsity_ratio() = }')
+
         ctx.save_for_backward(x, W1, W2, z_sparse)
         return output
 

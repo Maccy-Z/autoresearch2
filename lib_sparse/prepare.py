@@ -5,7 +5,7 @@ import time
 import math
 import gc
 
-from layer_versions import FFNv3, FFNSparse
+from prepare_layer import FFNv3, FFNSparse
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
