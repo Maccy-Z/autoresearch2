@@ -5,6 +5,7 @@ import triton.language as tl
 @triton.jit
 def _unpack_batch_kernel(
     vals_ptr, bitmask_ptr, prefix_ptr,
+    layer_offset_ptr,
     dense_ptr,
     first_m_tile, grid_n_sparse, K, batch_rows,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
@@ -37,7 +38,8 @@ def _unpack_batch_kernel(
     # The compact vals array stores this tile's nonzeros contiguously,
     # starting at prefix[tile_id].  Use a local prefix-sum (cumsum) over the
     # bitmask to map each nonzero to its rank within the tile.
-    base = tl.load(prefix_ptr + tile_id)
+    offset = tl.load(layer_offset_ptr)
+    base = tl.load(prefix_ptr + tile_id) + offset
 
     ranks = tl.cumsum(mask_bits, 0) - 1
     v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
