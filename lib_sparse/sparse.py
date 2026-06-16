@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-class BitsparseTensor(torch.Tensor):
+class BitsparseTensor:
     """Bitmask sparse tensor."""
     vals: Tensor
     bitmask: Tensor
@@ -19,15 +19,6 @@ class BitsparseTensor(torch.Tensor):
     grid_m: int
     grid_n: int
 
-    @staticmethod
-    def __new__(cls, vals: Tensor, bitmask: Tensor, prefix: Tensor,
-                grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
-                shape, dtype, device):
-        return torch.Tensor._make_wrapper_subclass(
-            cls,
-            shape,
-            dtype=dtype, device=device, requires_grad=True,
-        )
 
     def __init__(self, vals: Tensor, bitmask: Tensor, prefix: Tensor,
                  grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
@@ -40,40 +31,41 @@ class BitsparseTensor(torch.Tensor):
         self.grid_n = grid_n
         self.BLOCK_M = BLOCK_M
         self.BLOCK_N = BLOCK_N
+        self.shape = shape
 
     def __repr__(self):
         return (f"BitsparseTensor(shape={list(self.shape)}, device={self.device}, "
                 f"nnz={self.vals.numel()}, requires_grad={self.requires_grad})\n")
 
-    @classmethod
-    def _from_parts(cls, sparse):
-        # Create clone of tensor, used for .detach(), .clone() etc. Bypasses normal user-facing construction logic.
-        obj = torch.Tensor._make_wrapper_subclass(
-            cls,
-            sparse.shape,
-            strides=sparse.stride(),
-            storage_offset=sparse.storage_offset(),
-            dtype=sparse.dtype,
-            layout=sparse.layout,
-            device=sparse.device,
-            requires_grad=sparse.requires_grad,
-        )
-        obj.vals = sparse.vals
-        obj.bitmask = sparse.bitmask
-        obj.prefix = sparse.prefix
-        obj.grid_m = sparse.grid_m
-        obj.grid_n = sparse.grid_n
-        obj.BLOCK_M = sparse.BLOCK_M
-        obj.BLOCK_N = sparse.BLOCK_N
-        return obj
-
-    @classmethod
-    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-        if func is torch.ops.aten.detach.default:
-            self = args[0]
-            return BitsparseTensor._from_parts(self)
-
-        raise NotImplementedError
+    # @classmethod
+    # def _from_parts(cls, sparse):
+    #     # Create clone of tensor, used for .detach(), .clone() etc. Bypasses normal user-facing construction logic.
+    #     obj = torch.Tensor._make_wrapper_subclass(
+    #         cls,
+    #         sparse.shape,
+    #         strides=sparse.stride(),
+    #         storage_offset=sparse.storage_offset(),
+    #         dtype=sparse.dtype,
+    #         layout=sparse.layout,
+    #         device=sparse.device,
+    #         requires_grad=sparse.requires_grad,
+    #     )
+    #     obj.vals = sparse.vals
+    #     obj.bitmask = sparse.bitmask
+    #     obj.prefix = sparse.prefix
+    #     obj.grid_m = sparse.grid_m
+    #     obj.grid_n = sparse.grid_n
+    #     obj.BLOCK_M = sparse.BLOCK_M
+    #     obj.BLOCK_N = sparse.BLOCK_N
+    #     return obj
+    #
+    # @classmethod
+    # def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+    #     if func is torch.ops.aten.detach.default:
+    #         self = args[0]
+    #         return BitsparseTensor._from_parts(self)
+    #
+    #     raise NotImplementedError
 
     def vram_size(self):
         val_size = self.vals.element_size() * self.vals.nelement()
@@ -85,7 +77,61 @@ class BitsparseTensor(torch.Tensor):
         return 1 - self.vals.numel() / self.numel()
 
 
-# @torch.compiler.disable
+class FFNSparse(Function):
+    """ Sparse feedforward layer """
+    @staticmethod
+    def forward(ctx, x, W1, W2):
+        """
+        out = relu(x @ W1.T) @ W2.T
+
+        x.shape = [BS, dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
+
+        returns:
+            output: (BS, dim)
+        """
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        z = F.relu(preact)
+        output = z @ W2.T           # shape = [BS, dim]
+
+        z_sparse = dense_to_tilesparse(z)
+
+        ctx.save_for_backward(x, W1, W2)
+        ctx.z_sparse = z_sparse
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, W1, W2 = ctx.saved_tensors
+        z_sparse = ctx.z_sparse
+        ctx.z_sparse = None
+
+        # output = z @ W2.T
+        # grad_output.shape = [BS, dim]
+
+        grad_z = grad_output @ W2                   # [BS, exp_fact*in_dim]
+        grad_W2 = spAx(z_sparse, grad_output.T)      # [dim, exp_fact*in_dim]
+
+        # z = relu(preact) — apply mask directly via bitmask kernel (in-place on grad_z)
+        TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
+        TILE_BYTES = TILE_NUMEL // 8
+        _mask_with_bitmask_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
+            grad_z, z_sparse.bitmask, grad_z,
+            z_sparse.shape[0], z_sparse.shape[1],
+            BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+            num_warps=4, num_stages=2,
+        )
+        grad_preact = grad_z
+
+        # preact = x @ W1.T
+        grad_x = grad_preact @ W1          # [BS, dim]
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
+
+        return grad_x, grad_W1, grad_W2
+
+
 def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
@@ -117,7 +163,7 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
     tile_prefix[0] = 0
 
-    total_nnz = tile_prefix[-1]#.item()
+    total_nnz = M * N  # tile_prefix[-1].item()
 
     # --- launch: compact nonzeros into contiguous vals ---
     vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
@@ -182,58 +228,6 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     )
 
     return W @ dense
-
-
-class FFNSparse(Function):
-    """ Sparse feedforward layer """
-    @staticmethod
-    def forward(ctx, x, W1, W2):
-        """
-        out = relu(x @ W1.T) @ W2.T
-
-        x.shape = [BS, dim]
-        W1.shape = [exp_fact*in_dim, in_dim]
-        W2.shape = [dim, exp_fact*in_dim]
-
-        returns:
-            output: (BS, dim)
-        """
-        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
-        z = F.relu(preact)
-        output = z @ W2.T           # shape = [BS, dim]
-
-        z_sparse = dense_to_tilesparse(z)
-
-        ctx.save_for_backward(x, W1, W2, z_sparse)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, W1, W2, z_sparse = ctx.saved_tensors
-
-        # output = z @ W2.T
-        # grad_output.shape = [BS, dim]
-
-        grad_z = grad_output @ W2                   # [BS, exp_fact*in_dim]
-        grad_W2 = spAx(z_sparse, grad_output.T)      # [dim, exp_fact*in_dim]
-
-        # z = relu(preact) — apply mask directly via bitmask kernel (in-place on grad_z)
-        TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
-        TILE_BYTES = TILE_NUMEL // 8
-        _mask_with_bitmask_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
-            grad_z, z_sparse.bitmask, grad_z,
-            z_sparse.shape[0], z_sparse.shape[1],
-            BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
-            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-            num_warps=4, num_stages=2,
-        )
-        grad_preact = grad_z
-
-        # preact = x @ W1.T
-        grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
-
-        return grad_x, grad_W1, grad_W2
 
 
 def main():
