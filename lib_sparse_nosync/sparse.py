@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 # ------------------- Global value buffer ------------------------------------
-_global_vals = None
-_global_offset = None
+_global_vals: torch.Tensor = None
+_global_offset: torch.Tensor = None
 
 
 def init_sparse_buffer(size: int, device, dtype):
@@ -185,9 +185,6 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
     grid_m, grid_n = x_sparse.grid_m, x_sparse.grid_n
     M, N = x_sparse.shape
-    if W.shape[1] != M:
-        raise ValueError(f"W.shape must be [K, {M}] for W @ sparse_x, got {tuple(W.shape)}")
-    K = W.shape[0]
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8

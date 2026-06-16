@@ -38,7 +38,7 @@ class DeepFFN(nn.Module):
             self.W1s.append(nn.Parameter(W1))
             self.W2s.append(nn.Parameter(W2))
 
-    # @torch.compile()
+    @torch.compile()
     def forward(self, x):
         """ x.shape = [BS, dim] """
         for W1, W2 in zip(self.W1s, self.W2s):
@@ -123,7 +123,7 @@ def run_base():
     #     recompiles=True,
     # )
 
-    # torch._functorch.config.activation_memory_budget = 0.8
+    torch._functorch.config.activation_memory_budget = 0.8
 
     evaluate()
 
