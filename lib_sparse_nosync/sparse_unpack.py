@@ -57,20 +57,29 @@ def _unpack_batch_kernel(
 
 @triton.jit
 def _mask_with_bitmask_kernel(
-    grad_ptr, bitmask_ptr, out_ptr,
+    grad_ptr, bitmask_ptr,
     M, N,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    TILE_BYTES: tl.constexpr,
 ):
+    """
+    Mask a dense gradient matrix (in-place) using the stored bitmask,
+    zeroing out elements that were originally zero in the sparse matrix.
+
+    Each program covers one tile [BLOCK_M x BLOCK_N].  The 2-D grid
+    iterates over all tiles of the M×N matrix.
+    """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     grid_n = tl.num_programs(1)
 
+    # Row/column indices for this tile.
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs = rm[:, None] * N + rn[None, :]
     gz = tl.load(grad_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
 
+    # Read the packed uint8 bitmask for this tile and unpack into bools.
     tile_id = pid_m * grid_n + pid_n
     byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
     bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
@@ -79,7 +88,6 @@ def _mask_with_bitmask_kernel(
     bit_pos = tl.arange(0, 8)[None, :]
     bits = tl.reshape((bytes_2d >> bit_pos) & 1, (BLOCK_M, BLOCK_N))
 
+    # Zero out gradient elements where the bitmask is 0 (in-place store).
     masked = tl.where(bits != 0, gz, 0.0)
-
-    tl.store(out_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
-
+    tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
