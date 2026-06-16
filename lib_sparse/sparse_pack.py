@@ -67,12 +67,14 @@ def _compact_vals_kernel(
     dense_ptr,
     tile_prefix_ptr,
     vals_out_ptr,
+    layer_offset_ptr,
     M, N, grid_n,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    base = tl.load(tile_prefix_ptr + pid)          # offset of this tile in vals_out
+    offset = tl.load(layer_offset_ptr)
+    base = tl.load(tile_prefix_ptr + pid) + offset
 
     tile_m = pid // grid_n
     tile_n = pid % grid_n

@@ -4,9 +4,11 @@ import torch.nn.functional as F
 import time
 import math
 import gc
+import torch._logging
+import logging
 
 from prepare_layer import FFNv3, FFNv2, FFNv1, FFNckpt
-from sparse import FFNSparse
+from sparse import FFNSparse, reset_sparse_globals, init_sparse_buffer
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
@@ -53,6 +55,7 @@ def run_step(x, model, steps=1):
 
     for _ in range(steps):
         model.zero_grad()
+        reset_sparse_globals()
         y = model(x)
         loss = (y - x).pow(2).mean()
         # VRAM usage
@@ -73,18 +76,30 @@ def run_step(x, model, steps=1):
     return loss.cpu().detach(), grad_stds.cpu().detach(), allocated, avg_time
 
 
-def evaluate(x, dtype):
+def evaluate():
+    # Setup parameters
+    hdim = 4096
+    bs = 10_000
+    dtype = torch.bfloat16
+
+    G = torch.Generator(device="cuda").manual_seed(0)
+    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
+
     # Dense exact solution
-    model = DeepFFN(FFNv3, dtype=dtype)
+    model = DeepFFN(FFNv1, dtype=dtype)
     loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, steps=1)
     del model
     print(f'{vram_dn = :.2f} MB')
 
     # Our model
     model = DeepFFN(FFNSparse, dtype=dtype)
+    # Setup sparse buffer
+    hdim_expanded = math.floor(hdim * 5.25)
+    init_sparse_buffer(
+        int(bs * hdim_expanded * 12 * 0.55), device="cuda", dtype=dtype,
+    )
     # Warmup
     run_step(x, model, steps=2)
-
     # Main run
     loss, grad_stds, vram, avg_time = run_step(x, model, steps=5)
 
@@ -101,16 +116,16 @@ def evaluate(x, dtype):
 def run_base():
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    # torch._functorch.config.activation_memory_budget = 0.5
+    # torch._logging.set_logs(
+    #     dynamo=logging.INFO,
+    #     dynamic=logging.INFO,
+    #     graph_breaks=True,
+    #     recompiles=True,
+    # )
 
-    hdim = 4096
-    bs = 10_000
-    dtype = torch.bfloat16
+    torch._functorch.config.activation_memory_budget = 0.8
 
-    G = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
-
-    evaluate(x, dtype=dtype)
+    evaluate()
 
 
 if __name__ == "__main__":
