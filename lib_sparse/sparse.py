@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-
 class BitsparseTensor(torch.Tensor):
     """Bitmask sparse tensor."""
     vals: Tensor
@@ -20,6 +19,7 @@ class BitsparseTensor(torch.Tensor):
     grid_n: int
 
     @staticmethod
+    @torch.compiler.disable
     def __new__(cls, vals: Tensor, bitmask: Tensor, prefix: Tensor,
                 grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
                 shape, dtype, device):
@@ -75,7 +75,13 @@ class BitsparseTensor(torch.Tensor):
 
         raise NotImplementedError
 
+    def vram_size(self):
+        val_size = self.vals.element_size() * self.vals.nelement()
+        bitmask_size = self.bitmask.element_size() * self.bitmask.nelement()
+        prefix_size = self.prefix.element_size() * self.prefix.nelement()
+        return (val_size + bitmask_size + prefix_size)/1024**2
 
+@torch.compiler.disable
 def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
@@ -125,6 +131,27 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> Bitspa
     )
 
 
+def unpack_bitmask_to_bool(sparse: BitsparseTensor) -> torch.Tensor:
+    """
+    Unpack a packed tile bitmask into a dense [M, N] boolean tensor.
+    """
+    bitmask = sparse.bitmask
+    M, N = sparse.shape
+    grid_m, grid_n = sparse.grid_m, sparse.grid_n
+    BLOCK_M, BLOCK_N = sparse.BLOCK_M, sparse.BLOCK_N
+    tile_numel = BLOCK_M * BLOCK_N
+    tile_bytes = tile_numel // 8
+    num_tiles = grid_m * grid_n
+
+    packed = bitmask.reshape(num_tiles, tile_bytes).to(torch.int16)
+    bit_pos = torch.arange(8, device=bitmask.device, dtype=torch.int16)
+    bits = ((packed.unsqueeze(-1) >> bit_pos) & 1).to(torch.bool)
+
+    tiles = bits.reshape(grid_m, grid_n, BLOCK_M, BLOCK_N)
+    dense_mask = tiles.permute(0, 2, 1, 3).reshape(grid_m * BLOCK_M, grid_n * BLOCK_N)
+    return dense_mask[:M, :N]
+
+
 def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """
     y = relu(x @ W.T), then pack into a compact per-tile
@@ -141,12 +168,11 @@ def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTenso
 
 def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     """
-    y = relu(sparse_x @ W).
+    y = W @ sparse_x.
     x.shape = [M, N]
-    W.shape = [N, K]
+    W.shape = [K, M]
 
-    Unpacks the sparse representation into dense row-batches, then uses
-    F.linear for the matmul and ReLU.
+    Unpacks the sparse representation into dense row-batches, then uses dense matmul for each W column slice.
     """
     #
     vals = x_sparse.vals
@@ -155,15 +181,16 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
     _, grid_n = x_sparse.grid_m, x_sparse.grid_n
     M, N = x_sparse.shape
-    N = W.shape[0]
-    K = W.shape[1]
+    if W.shape[1] != M:
+        raise ValueError(f"W.shape must be [K, {M}] for W @ sparse_x, got {tuple(W.shape)}")
+    K = W.shape[0]
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
     ROW_BATCH = 2048
 
-    out = torch.empty(M, K, device=W.device, dtype=W.dtype)
+    out = torch.zeros(K, N, device=W.device, dtype=W.dtype)
 
     for m_start in range(0, M, ROW_BATCH):
         m_end = min(m_start + ROW_BATCH, M)
@@ -184,8 +211,7 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
             num_warps=8, num_stages=2,
         )
 
-        batch_out = F.linear(dense_batch, W)
-        out[m_start:m_end].copy_(batch_out)
+        out.add_(W[:, m_start:m_end] @ dense_batch)
 
     return out
 

@@ -1,7 +1,7 @@
 from torch.autograd import Function
 import torch.nn.functional as F
 
-from sparse import dense_to_tilesparse, sp_relu_Ax
+from sparse import dense_to_tilesparse, spAx, unpack_bitmask_to_bool
 
 
 class FFNv1(Function):
@@ -11,13 +11,13 @@ class FFNv1(Function):
         out = relu(x @ W1.T) @ W2.T
 
         x.shape = [BS, dim]
-        W1.shape = [4*in_dim, in_dim]
-        W2.shape = [dim, 4*in_dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
 
         returns:
             output: (BS, dim)
         """
-        preact = x @ W1.T           # shape = [BS, 4*in_dim]
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
         z = F.relu(preact)
         output = z @ W2.T           # shape = [BS, dim]
 
@@ -31,15 +31,15 @@ class FFNv1(Function):
         # output = z @ W2.T
         # grad_output.shape = [BS, dim]
 
-        grad_z = grad_output @ W2          # [BS, 4*in_dim]
-        grad_W2 = grad_output.T @ z        # [dim, 4*in_dim]
+        grad_z = grad_output @ W2          # [BS, exp_fact*in_dim]
+        grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
 
         # z = relu(preact)
         grad_preact = grad_z * (preact>0)
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [4*in_dim, dim]
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2
 
@@ -52,13 +52,13 @@ class FFNv2(Function):
         out = relu(x @ W1.T) @ W2.T
 
         x.shape = [BS, dim]
-        W1.shape = [4*in_dim, in_dim]
-        W2.shape = [dim, 4*in_dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
 
         returns:
             output: (BS, dim)
         """
-        preact = x @ W1.T           # shape = [BS, 4*in_dim]
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
         z = F.relu(preact)
         output = z @ W2.T           # shape = [BS, dim]
 
@@ -72,15 +72,15 @@ class FFNv2(Function):
         # output = z @ W2.T
         # grad_output.shape = [BS, dim]
 
-        grad_z = grad_output @ W2          # [BS, 4*in_dim]
-        grad_W2 = grad_output.T @ z        # [dim, 4*in_dim]
+        grad_z = grad_output @ W2          # [BS, exp_fact*in_dim]
+        grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
 
         # z = relu(preact)
         grad_preact = grad_z * relu_grad
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [4*in_dim, dim]
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2
 
@@ -93,13 +93,13 @@ class FFNv3(Function):
         out = relu(x @ W1.T) @ W2.T
 
         x.shape = [BS, dim]
-        W1.shape = [4*in_dim, in_dim]
-        W2.shape = [dim, 4*in_dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
 
         returns:
             output: (BS, dim)
         """
-        preact = x @ W1.T           # shape = [BS, 4*in_dim]
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
         z = F.relu(preact)
         output = z @ W2.T           # shape = [BS, dim]
 
@@ -113,62 +113,58 @@ class FFNv3(Function):
         # output = z @ W2.T
         # grad_output.shape = [BS, dim]
 
-        grad_z = grad_output @ W2          # [BS, 4*in_dim]
-        grad_W2 = grad_output.T @ z        # [dim, 4*in_dim]
+        grad_z = grad_output @ W2          # [BS, exp_fact*in_dim]
+        grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
 
         # z = relu(preact)
         grad_preact = grad_z * (z>0)
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [4*in_dim, dim]
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2
 
 
-class FFNv4(Function):
-    """ Recompute relu gradient """
+class FFNSparse(Function):
+    """ Sparse gradient """
     @staticmethod
     def forward(ctx, x, W1, W2):
         """
         out = relu(x @ W1.T) @ W2.T
 
         x.shape = [BS, dim]
-        W1.shape = [4*in_dim, in_dim]
-        W2.shape = [dim, 4*in_dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
 
         returns:
             output: (BS, dim)
         """
-        preact = x @ W1.T           # shape = [BS, 4*in_dim]
+        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
         z = F.relu(preact)
 
         output = z @ W2.T           # shape = [BS, dim]
 
         z_sparse = dense_to_tilesparse(z)
-
-        # print(f'{z.numel() = }')
-        # print(f'{z_sparse.vals.numel() =}')
-        ctx.save_for_backward(x, W1, W2, (z>0), z_sparse)
+        ctx.save_for_backward(x, W1, W2, z_sparse)
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, W1, W2, relu_grad, z_sparse = ctx.saved_tensors
+        x, W1, W2, z_sparse = ctx.saved_tensors
 
         # output = z @ W2.T
         # grad_output.shape = [BS, dim]
 
-        grad_z = grad_output @ W2          # [BS, 4*in_dim]
-        grad_W2 = grad_output.T @ z_sparse        # [dim, 4*in_dim]
+        grad_z = grad_output @ W2                   # [BS, exp_fact*in_dim]
+        grad_W2 = spAx(z_sparse, grad_output.T)      # [dim, exp_fact*in_dim]
 
         # z = relu(preact)
+        relu_grad = unpack_bitmask_to_bool(z_sparse)
         grad_preact = grad_z * relu_grad
 
         # preact = x @ W1.T
         grad_x = grad_preact @ W1          # [BS, dim]
-        grad_W1 = grad_preact.T @ x        # [4*in_dim, dim]
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2
-
-
