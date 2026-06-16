@@ -81,6 +81,10 @@ class BitsparseTensor(torch.Tensor):
         prefix_size = self.prefix.element_size() * self.prefix.nelement()
         return (val_size + bitmask_size + prefix_size)/1024**2
 
+    def sparsity_ratio(self):
+        return 1 - self.vals.numel() / self.numel()
+
+
 @torch.compiler.disable
 def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=128, BLOCK_N=128) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
