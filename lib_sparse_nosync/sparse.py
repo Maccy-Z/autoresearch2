@@ -173,20 +173,6 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     )
 
 
-def sp_relu_Ax(W: Tensor, x: Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
-    """
-    y = relu(x @ W.T), then pack into a compact per-tile
-    sparse representation.
-
-    Returns a BitsparseTensor:
-    """
-
-    # Do matmul as normal
-    y1 = F.relu(F.linear(x, W))
-
-    return dense_to_tilesparse(y1, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N)
-
-
 def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     """
     y = W @ sparse_x.
@@ -220,16 +206,3 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     )
 
     return W @ dense
-
-
-def main():
-    W = torch.randn(1024, 1024, device="cuda")
-    x = torch.randn(100, 1024, device="cuda")
-
-    sp = sp_relu_Ax(W, x)
-    print(sp)
-    out = spAx(sp, W)
-    print(out)
-
-if __name__ == "__main__":
-    main()
