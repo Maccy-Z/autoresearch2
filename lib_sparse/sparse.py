@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel, _square_dense_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
+from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -140,7 +140,7 @@ class FFNSpRelu2(Function):
 
         grad_z = grad_output @ W2
 
-        # grad_preact = grad_z * (2 * z) — mask only, squaring done by spAx_squared
+        # grad_preact = grad_z * (2 * z) + square vals in-place for spAx
         _grad_relu2_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
             grad_z, z_sparse.vals, z_sparse.bitmask, z_sparse.prefix,
             z_sparse.vals_offset,
@@ -152,7 +152,7 @@ class FFNSpRelu2(Function):
         )
         grad_preact = grad_z
 
-        grad_W2 = spAx(z_sparse, grad_output.T, square=True)
+        grad_W2 = spAx(z_sparse, grad_output.T)
 
         grad_x = grad_preact @ W1
         grad_W1 = grad_preact.T @ x
@@ -215,9 +215,9 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     )
 
 
-def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
+def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     """
-    y = W @ sparse_x.  If square=True, uses sparse_x^2 instead.
+    y = W @ sparse_x.
     x.shape = [M, N]
     W.shape = [K, M]
     """
@@ -244,12 +244,6 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
         num_warps=4, num_stages=2,
     )
 
-    if square:
-        _square_dense_kernel[(grid_m, grid_n)](
-            dense, M, N,
-            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-            num_warps=4, num_stages=2,
-        )
-
     return W @ dense
+
 
