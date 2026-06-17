@@ -2,27 +2,15 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn.functional as F
 from torch.autograd import Function
+from cprint import c_print
+import triton
+from torch.library import triton_op, wrap_triton
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel, _square_dense_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
+from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
-# ------------------- Global value buffer ------------------------------------
-_global_vals: torch.Tensor = None
-_global_offset: torch.Tensor = None
-
-
-def init_sparse_buffer(size: int, device, dtype):
-    global _global_vals, _global_offset
-    _global_vals = torch.empty(size, device=device, dtype=dtype)
-    _global_offset = torch.zeros(1, device=device, dtype=torch.int32)
-
-
-def reset_sparse_globals():
-    global _global_offset
-    if _global_offset is not None:
-        _global_offset.zero_()
 
 
 class BitsparseTensor:
@@ -44,7 +32,7 @@ class BitsparseTensor:
         self.vals = vals
         self.bitmask = bitmask
         self.prefix = prefix
-        self.vals_offset = vals_offset
+        self.vals_offset = vals_offset + 1 - 1
         self.grid_m = grid_m
         self.grid_n = grid_n
         self.BLOCK_M = BLOCK_M
@@ -68,7 +56,7 @@ class BitsparseTensor:
 class FFNSparse(Function):
     """ Sparse feedforward layer """
     @staticmethod
-    def forward(ctx, x, W1, W2):
+    def forward(ctx, x, W1, W2, sparse_data):
         """
         out = relu(x @ W1.T) @ W2.T
 
@@ -79,12 +67,15 @@ class FFNSparse(Function):
         returns:
             output: (BS, dim)
         """
+        vals, offsets = sparse_data
+
         preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        # preact.relu_()
         z = F.relu(preact)
         output = z @ W2.T           # shape = [BS, dim]
 
-        z_sparse = dense_to_tilesparse(z)
-
+        z_sparse = dense_to_tilesparse(z, vals, offsets)
+        del z
         ctx.save_for_backward(x, W1, W2)
         ctx.z_sparse = z_sparse
         return output
@@ -115,7 +106,7 @@ class FFNSparse(Function):
         grad_x = grad_preact @ W1          # [BS, dim]
         grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
-        return grad_x, grad_W1, grad_W2
+        return grad_x, grad_W1, grad_W2, None, None
 
 
 class FFNSpRelu2(Function):
@@ -160,13 +151,11 @@ class FFNSpRelu2(Function):
         return grad_x, grad_W1, grad_W2
 
 
-def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
+def dense_to_tilesparse(dense: torch.Tensor, vals, offset, BLOCK_M=64, BLOCK_N=64) -> BitsparseTensor:
     """Pack a dense 2D tensor into the per-tile compressed sparse format.
 
     Returns a BitsparseTensor.
     """
-    global _global_vals, _global_offset
-
     M, N = dense.shape
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
@@ -194,9 +183,9 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     tile_prefix[0] = 0
 
     # --- record moment offset, launch compact with offset ---
-    my_offset = _global_offset.clone()
+    my_offset = offset.clone()
     _compact_vals_kernel[(num_tiles,)](
-        dense, tile_prefix, _global_vals,
+        dense, tile_prefix, vals,
         my_offset,
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
@@ -205,14 +194,112 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     )
 
     # --- advance global offset for the next layer ---
-    _global_offset = _global_offset + tile_prefix[-1]
-
+    # global _global_offset
+    # _global_offset = _global_offset + tile_prefix[-1]
+    # print(f'{my_offset = },')
+    offset.index_add_(
+        0,
+        torch.tensor([0], device="cuda"),
+        tile_prefix[-1].reshape(1),
+    )
     return BitsparseTensor(
-        _global_vals, tile_bitmasks, tile_prefix,
+        vals, tile_bitmasks, tile_prefix,
         my_offset,
         grid_m, grid_n, BLOCK_M, BLOCK_N,
         dense.shape
     )
+
+# def dense_to_tilesparse(
+#     dense: torch.Tensor,
+#     vals: torch.Tensor,
+#     offset: torch.Tensor,
+#     BLOCK_M: int = 64,
+#     BLOCK_N: int = 64,
+# ) -> BitsparseTensor:
+#     tile_bitmasks, tile_prefix, my_offset, grid_m, grid_n, offset_inc = dense_to_tilesparse_op(
+#         dense,
+#         vals,
+#         offset,
+#         BLOCK_M,
+#         BLOCK_N,
+#     )
+#     # print(vals)
+#     with torch.no_grad():
+#         offset.add_(offset_inc.detach())
+#
+#     return BitsparseTensor(
+#         vals,
+#         tile_bitmasks,
+#         tile_prefix,
+#         my_offset,
+#         grid_m,
+#         grid_n,
+#         BLOCK_M,
+#         BLOCK_N,
+#         dense.shape,
+#     )
+# #
+# @triton_op("bitsparse::dense_to_tilesparse", mutates_args={"vals"})
+# def dense_to_tilesparse_op(
+#     dense: torch.Tensor,
+#     vals: torch.Tensor,
+#     offset: torch.Tensor,
+#     BLOCK_M: int = 64,
+#     BLOCK_N: int = 64,
+# ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, torch.Tensor]:
+#     M, N = dense.shape
+#
+#     TILE_NUMEL = BLOCK_M * BLOCK_N
+#     TILE_BYTES = TILE_NUMEL // 8
+#
+#     grid_m = triton.cdiv(M, BLOCK_M)
+#     grid_n = triton.cdiv(N, BLOCK_N)
+#     num_tiles = grid_m * grid_n
+#
+#     tile_counts = torch.empty(
+#         (num_tiles,),
+#         device=dense.device, dtype=torch.int32,
+#     )
+#
+#     tile_bitmasks = torch.empty(
+#         (num_tiles * TILE_BYTES,),
+#         device=dense.device, dtype=torch.uint8,
+#     )
+#
+#     wrap_triton(_tile_pack_kernel)[(grid_m, grid_n)](
+#         dense,  tile_counts, tile_bitmasks,
+#         M, N,
+#         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+#         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+#         num_warps=4, num_stages=2,
+#     )
+#
+#     tile_prefix = torch.empty(
+#         (num_tiles + 1,),
+#         device=dense.device, dtype=torch.int32,
+#     )
+#
+#     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
+#     tile_prefix[0] = 0
+#
+#     my_offset = offset.clone()
+#
+#     wrap_triton(_compact_vals_kernel)[(num_tiles,)](
+#         dense, tile_prefix, vals, my_offset,
+#         M, N,
+#         grid_n,
+#         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+#         TILE_NUMEL=TILE_NUMEL,
+#         num_warps=4, num_stages=2,
+#     )
+#
+#     # offset.add_(tile_prefix[-1:])
+#
+#     return tile_bitmasks, tile_prefix, my_offset, grid_m, grid_n, tile_prefix[-1:].clone()
+
+
+
+
 
 
 def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
@@ -225,31 +312,41 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
     bitmask = x_sparse.bitmask
     prefix = x_sparse.prefix
     BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
-    grid_m, grid_n = x_sparse.grid_m, x_sparse.grid_n
+    grid_n = x_sparse.grid_n
     M, N = x_sparse.shape
+    if W.shape[1] != M:
+        raise ValueError(f"W.shape must be [K, {M}] for W @ sparse_x, got {tuple(W.shape)}")
+    K = W.shape[0]
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
-    num_tiles = grid_m * grid_n
-    dense = torch.empty(M, N, device=W.device, dtype=vals.dtype)
+    ROW_BATCH = 2048
+    out = torch.zeros(K, N, device=W.device, dtype=W.dtype)
 
-    _unpack_batch_kernel[(num_tiles,)](
-        vals, bitmask, prefix,
-        x_sparse.vals_offset,
-        dense,
-        0, grid_n, N, M,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
-    )
+    for m_start in range(0, M, ROW_BATCH):
+        m_end = min(m_start + ROW_BATCH, M)
+        batch_rows = m_end - m_start
+        first_m_tile = m_start // BLOCK_M
 
-    if square:
-        _square_dense_kernel[(grid_m, grid_n)](
-            dense, M, N,
+        dense_batch = torch.empty(batch_rows, N, device=W.device, dtype=vals.dtype)
+        num_row_tiles = (batch_rows + BLOCK_M - 1) // BLOCK_M
+        num_tiles_in_batch = num_row_tiles * grid_n
+
+        _unpack_batch_kernel[(num_tiles_in_batch,)](
+            vals, bitmask, prefix,
+            x_sparse.vals_offset,
+            dense_batch,
+            first_m_tile, grid_n, N, batch_rows,
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
             num_warps=4, num_stages=2,
         )
 
-    return W @ dense
+        if square:
+            dense_batch = dense_batch.square()
+
+        out.add_(W[:, m_start:m_end] @ dense_batch)
+
+    return out
 

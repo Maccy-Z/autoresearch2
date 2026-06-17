@@ -25,7 +25,7 @@ class FFNrelu2:
 
 class FFNv1:
     @staticmethod
-    def apply(x, W1, W2):
+    def apply(x, W1, W2, a=None, b=None):
         """
         out = relu(x @ W1.T) @ W2.T
 
@@ -111,7 +111,7 @@ class FFNv2(Function):
 class FFNv3(Function):
     """ Recompute relu gradient """
     @staticmethod
-    def forward(ctx, x, W1, W2):
+    def forward(ctx, x, W1, W2, e1):
         """
         out = relu(x @ W1.T) @ W2.T
 
@@ -146,4 +146,4 @@ class FFNv3(Function):
         grad_x = grad_preact @ W1          # [BS, dim]
         grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
-        return grad_x, grad_W1, grad_W2
+        return grad_x, grad_W1, grad_W2, None, None

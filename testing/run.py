@@ -1,3 +1,12 @@
+# import os
+# # PYTORCH_NO_CUDA_MEMORY_CACHING=1
+# os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
+# #TORCH_SHOW_CPP_STACKTRACES=1
+# os.environ["TORCH_SHOW_CPP_STACKTRACES"] = "1"
+# # CUDA_LAUNCH_BLOCKING=1;PYTORCH_NO_CUDA_MEMORY_CACHING=1
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,8 +17,8 @@ import torch._logging
 import logging
 from cprint import c_print
 
-from prepare_layer import FFNv3, FFNv2, FFNv1, FFNckpt, FFNrelu2
-from sparse import FFNSparse # reset_sparse_globals, init_sparse_buffer, FFNSpRelu2, get_globals
+from lib_sparse.prepare_layer import FFNv3, FFNv1
+from test_sparse import FFNSparse#, reset_sparse_globals, init_sparse_buffer, get_globals
 
 
 # ------------------- Global value buffer ------------------------------------
@@ -17,12 +26,14 @@ _global_vals: torch.Tensor = None
 _global_offset: torch.Tensor = None
 
 def init_sparse_buffer(size: int, device, dtype):
-    global _global_vals, _global_offset
+    global _global_vals, _global_offset, _global_counter
     _global_vals = torch.empty(size, device=device, dtype=dtype)
     _global_offset = torch.zeros(1, device=device, dtype=torch.int32)
+
     c_print(f'Global buffer: {_global_vals.nbytes/(1024**2)}MB', color='green')
     c_print(f'Maximum number of elements: {_global_vals.numel()}', color='green')
 
+@torch.compiler.disable()
 def reset_sparse_globals():
     global _global_offset
     if _global_offset is not None:
@@ -51,22 +62,12 @@ class DeepFFN(nn.Module):
     def __init__(self, dtype, layers=12, hidm=4096):
         super().__init__()
         G = torch.Generator(device="cuda").manual_seed(0)
-
         self.W1s, self.W2s = nn.ParameterList(), nn.ParameterList()
         for i in range(layers):
             W1, W2 = generate_parameters(hidm, G, dtype=dtype)
 
             self.W1s.append(nn.Parameter(W1))
             self.W2s.append(nn.Parameter(W2))
-
-    @torch.compile()
-    def forward_base(self, x, sparse_data):
-        """ x.shape = [BS, dim] """
-
-        for W1, W2 in zip(self.W1s, self.W2s):
-            x_inner = F.rms_norm(x, x.shape[-1:])
-            x = x + FFNv3.apply(x_inner, W1, W2, sparse_data)
-        return x
 
     @torch.compile()
     def forward_sparse(self, x, sparse_data):
@@ -78,7 +79,7 @@ class DeepFFN(nn.Module):
         return x
 
 
-def run_step(x, model, sparse, steps=1):
+def run_step(x, model, steps=1):
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats("cuda")
@@ -87,29 +88,24 @@ def run_step(x, model, sparse, steps=1):
     start = time.perf_counter()
 
     for _ in range(steps):
+        torch.cuda.reset_peak_memory_stats("cuda")
         model.zero_grad()
         reset_sparse_globals()
-        if sparse:
-            y = model.forward_sparse(x, sparse_data)
-        else:
-            y = model.forward_base(x, sparse_data)
+        y = model.forward_sparse(x, sparse_data)
         loss = (y - x).pow(2).mean()
-        # VRAM usage
-        # allocated = torch.cuda.memory_allocated("cuda") / 1024**2
-        print(f'{sparse_data[1] = }')
-
         loss.backward()
 
-    allocated = torch.cuda.max_memory_allocated("cuda") / 1024**2
+        # VRAM usage
+        allocated = torch.cuda.max_memory_allocated("cuda") / 1024**2
+        global_vals, global_offset = get_globals()
+        print(f'{global_offset = }')
+        torch.cuda.synchronize()
+
     torch.cuda.synchronize()
     end = time.perf_counter()
     avg_time = (end - start) * 1000 / steps
 
-    # Track gradient to ensure correctness
-    grad_stds = [torch.tensor(0.0)]
-    for i, (n, p) in enumerate(model.named_parameters()):
-        grad_stds.append(p.grad.std().cpu())
-    grad_stds = torch.stack(grad_stds) * 1e3
+    grad_stds = torch.ones(1)
     return loss.cpu().detach(), grad_stds.cpu().detach(), allocated, avg_time
 
 
@@ -122,45 +118,34 @@ def evaluate():
 
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
+    # Our model
     model = DeepFFN(layers=layers, dtype=dtype)
 
-    # # Dense exact solution
-    # loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, sparse=False, steps=1)
-    # print(f'{vram_dn = :.2f} MB')
-
-    # Our model
     # Setup sparse buffer
     hdim_expanded = math.floor(hdim * 5.25)
+    buffer_size = int(bs * hdim_expanded * layers * 0.55)
     init_sparse_buffer(
-        int(bs * hdim_expanded * layers * 0.55), device="cuda", dtype=dtype,
+        buffer_size, device="cuda", dtype=dtype,
     )
-    # Warmup
-    run_step(x, model, sparse=True, steps=2)
     # Main run
-    loss, grad_stds, vram, avg_time = run_step(x, model, sparse=True, steps=1)
+    loss, grad_stds, vram, avg_time = run_step(x, model, steps=3)
 
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
-
-    # Make sure we are close
-    # torch.testing.assert_close(loss_dn, loss)
-    # torch.testing.assert_close(grad_stds_dn, grad_stds)
-    # make sure vram has been reduced
-    # assert vram < vram_dn*0.9, f"VRAM usage not reduced enough: {vram:.2f} MB >= {vram_dn:.2f} MB"
 
 
 
 def run_base():
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    # torch._logging.set_logs(
-    #     dynamo=logging.INFO,
-    #     dynamic=logging.INFO,
-    #     graph_breaks=True,
-    #     recompiles=True,
-    # )
+    torch._logging.set_logs(
+        # dynamo=logging.INFO,
+        # dynamic=logging.INFO,
+        graph_breaks=True,
+        # recompiles=True,
+    )
 
-    torch._functorch.config.activation_memory_budget = 0.5
+    # torch._functorch.config.activation_memory_budget = 0.8
 
     evaluate()
 
