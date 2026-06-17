@@ -30,7 +30,7 @@ class BitsparseTensor:
     vals: Tensor            # Nonzero values
     bitmask: Tensor         # Bitmask of nonzero values.
     prefix: Tensor          # Int32 tensor of where each block starts in the vals array.
-    vals_offset: Tensor
+    vals_offset: Tensor     # Starting offset in vals for each tile.
     BLOCK_M: int            # Size of each tile [M, N]
     BLOCK_N: int
     grid_m: int             # Number of tiles in [M, N] dimensions. grid_m = ceil[M/BLOCK_M]
@@ -124,17 +124,17 @@ class FFNSpRelu2(Function):
     def forward(ctx, x, W1, W2):
         preact = x @ W1.T
         z = F.relu(preact)
-        output = (z ** 2) @ W2.T
+        output = (z * z) @ W2.T
 
         z_sparse = dense_to_tilesparse(z)
 
-        ctx.save_for_backward(x, W1, W2, z_sparse.vals)
+        ctx.save_for_backward(x, W1, W2)
         ctx.z_sparse = z_sparse
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, W1, W2, _ = ctx.saved_tensors
+        x, W1, W2 = ctx.saved_tensors
         z_sparse = ctx.z_sparse
         ctx.z_sparse = None
 
@@ -151,11 +151,11 @@ class FFNSpRelu2(Function):
             TILE_BYTES=z_sparse.BLOCK_M * z_sparse.BLOCK_N // 8,
             num_warps=4, num_stages=2, square=square_inplace
         )
-        # grad_preact = grad_z
+        grad_preact = grad_z
 
         grad_W2 = spAx(z_sparse, grad_output.T, square=(not square_inplace))
-        grad_x = grad_z @ W1
-        grad_W1 = grad_z.T @ x
+        grad_x = grad_preact @ W1
+        grad_W1 = grad_preact.T @ x
 
         return grad_x, grad_W1, grad_W2
 

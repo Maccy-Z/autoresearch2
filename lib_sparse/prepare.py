@@ -95,7 +95,7 @@ def evaluate():
     # Setup sparse buffer
     hdim_expanded = math.floor(hdim * 5.25)
     init_sparse_buffer(
-        int(bs * hdim_expanded * 12 * 0.55), device="cuda", dtype=dtype,
+        int(bs * hdim_expanded * layers * 0.55), device="cuda", dtype=dtype,
     )
     # Warmup
     run_step(x, model, steps=1)
@@ -123,7 +123,7 @@ def run_base():
     #     recompiles=True,
     # )
 
-    torch._functorch.config.activation_memory_budget = 0.8
+    # torch._functorch.config.activation_memory_budget = 0.8
 
     evaluate()
 
