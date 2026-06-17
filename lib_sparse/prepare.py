@@ -68,9 +68,7 @@ def run_step(x, model, steps=1):
 
     # Track gradient to ensure correctness
     grad_stds = []
-    for i, p in enumerate(model.parameters()):
-        if i > 5:
-            break
+    for i, (n, p) in enumerate(model.named_parameters()):
         grad_stds.append(p.grad.std().cpu())
     grad_stds = torch.stack(grad_stds) * 1e3
     return loss.cpu().detach(), grad_stds.cpu().detach(), allocated, avg_time
@@ -101,11 +99,11 @@ def evaluate():
     # Warmup
     run_step(x, model, steps=2)
     # Main run
-    loss, grad_stds, vram, avg_time = run_step(x, model, steps=5)
+    loss, grad_stds, vram, avg_time = run_step(x, model, steps=3)
 
     # Make sure we are close
-    torch.testing.assert_close(loss_dn, loss, atol=1e-3, rtol=1e-3)
-    torch.testing.assert_close(grad_stds_dn, grad_stds, atol=0.1, rtol=0.15)
+    torch.testing.assert_close(loss_dn, loss)
+    torch.testing.assert_close(grad_stds_dn, grad_stds)
     # make sure vram has been reduced
     # assert vram < vram_dn*0.9, f"VRAM usage not reduced enough: {vram:.2f} MB >= {vram_dn:.2f} MB"
 
