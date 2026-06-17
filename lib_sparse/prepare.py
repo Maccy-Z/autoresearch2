@@ -78,28 +78,32 @@ def evaluate():
     # Setup parameters
     hdim = 4096
     bs = 10_000
+    layers = 12
     dtype = torch.bfloat16
 
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
 
     # Dense exact solution
-    model = DeepFFN(FFNrelu2, dtype=dtype)
+    model = DeepFFN(FFNrelu2, layers=layers, dtype=dtype)
     loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, steps=1)
     del model
     print(f'{vram_dn = :.2f} MB')
 
     # Our model
-    model = DeepFFN(FFNSpRelu2, dtype=dtype)
+    model = DeepFFN(FFNSpRelu2,layers=layers, dtype=dtype)
     # Setup sparse buffer
     hdim_expanded = math.floor(hdim * 5.25)
     init_sparse_buffer(
         int(bs * hdim_expanded * 12 * 0.55), device="cuda", dtype=dtype,
     )
     # Warmup
-    run_step(x, model, steps=2)
+    run_step(x, model, steps=1)
     # Main run
     loss, grad_stds, vram, avg_time = run_step(x, model, steps=3)
+
+    print(f"VRAM allocated by tensors: {vram:.2f} MB")
+    print(f'{avg_time = :.2f} ms')
 
     # Make sure we are close
     torch.testing.assert_close(loss_dn, loss)
@@ -107,13 +111,17 @@ def evaluate():
     # make sure vram has been reduced
     # assert vram < vram_dn*0.9, f"VRAM usage not reduced enough: {vram:.2f} MB >= {vram_dn:.2f} MB"
 
-    print(f"VRAM allocated by tensors: {vram:.2f} MB")
-    print(f'{avg_time = :.2f} ms')
 
 
 def run_base():
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
+    # torch._logging.set_logs(
+    #     dynamo=logging.INFO,
+    #     dynamic=logging.INFO,
+    #     graph_breaks=True,
+    #     recompiles=True,
+    # )
 
     torch._functorch.config.activation_memory_budget = 0.8
 

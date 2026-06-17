@@ -203,3 +203,52 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
     )
 
     return W @ dense
+
+# def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
+#     """
+#     y = W @ sparse_x.
+#     x.shape = [M, N]
+#     W.shape = [K, M]
+#
+#     Unpacks the sparse representation into dense row-batches, then uses dense matmul for each W column slice.
+#     """
+#     #
+#     vals = x_sparse.vals
+#     bitmask = x_sparse.bitmask
+#     prefix = x_sparse.prefix
+#     BLOCK_M, BLOCK_N = x_sparse.BLOCK_M, x_sparse.BLOCK_N
+#     _, grid_n = x_sparse.grid_m, x_sparse.grid_n
+#     M, N = x_sparse.shape
+#     if W.shape[1] != M:
+#         raise ValueError(f"W.shape must be [K, {M}] for W @ sparse_x, got {tuple(W.shape)}")
+#     K = W.shape[0]
+#
+#     TILE_NUMEL = BLOCK_M * BLOCK_N
+#     TILE_BYTES = TILE_NUMEL // 8
+#
+#     ROW_BATCH = 2048
+#
+#     out = torch.zeros(K, N, device=W.device, dtype=W.dtype)
+#
+#     for m_start in range(0, M, ROW_BATCH):
+#         m_end = min(m_start + ROW_BATCH, M)
+#         batch_rows = m_end - m_start
+#         first_m_tile = m_start // BLOCK_M
+#
+#         dense_batch = torch.empty(batch_rows, N, device=W.device, dtype=vals.dtype)
+#
+#         num_row_tiles_in_batch = (batch_rows + BLOCK_M - 1) // BLOCK_M
+#         num_tiles_in_batch = num_row_tiles_in_batch * grid_n
+#
+#         _unpack_batch_kernel[(num_tiles_in_batch,)](
+#             vals, bitmask, prefix,
+#             dense_batch,
+#             first_m_tile, grid_n, N, batch_rows,
+#             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+#             TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+#             num_warps=8, num_stages=2,
+#         )
+#
+#         out.add_(W[:, m_start:m_end] @ dense_batch)
+#
+#     return out

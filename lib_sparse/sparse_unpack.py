@@ -56,6 +56,20 @@ def _unpack_batch_kernel(
 
 
 @triton.jit
+def _square_dense_kernel(
+    dense_ptr, M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    v = tl.load(dense_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+    tl.store(dense_ptr + offs, v * v, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
+
+@triton.jit
 def _mask_with_bitmask_kernel(
     grad_ptr, bitmask_ptr,
     M, N,
@@ -99,7 +113,7 @@ def _grad_relu2_kernel(
     layer_offset_ptr,
     M, N,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr, square: tl.constexpr
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -129,6 +143,5 @@ def _grad_relu2_kernel(
     masked = gz * 2.0 * z_2d
     tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
-    # Square vals in-place with fp32 intermediate (matching PyTorch's f32 accumulate)
-    z_f32 = z_vals.to(tl.float32)
-    tl.store(vals_ptr + base + ranks, z_f32 * z_f32, mask=(mask_bits == 1))
+    if square:
+        tl.store(vals_ptr + base + ranks, z_vals * z_vals, mask=(mask_bits == 1))

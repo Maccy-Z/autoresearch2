@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from sparse_pack import _tile_pack_kernel, _compact_vals_kernel
-from sparse_unpack import _unpack_batch_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
+from sparse_unpack import _unpack_batch_kernel, _square_dense_kernel, _mask_with_bitmask_kernel, _grad_relu2_kernel
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -128,19 +128,20 @@ class FFNSpRelu2(Function):
 
         z_sparse = dense_to_tilesparse(z)
 
-        ctx.save_for_backward(x, W1, W2)
+        ctx.save_for_backward(x, W1, W2, z_sparse.vals)
         ctx.z_sparse = z_sparse
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, W1, W2 = ctx.saved_tensors
+        x, W1, W2, _ = ctx.saved_tensors
         z_sparse = ctx.z_sparse
         ctx.z_sparse = None
 
         grad_z = grad_output @ W2
 
-        # grad_preact = grad_z * (2 * z) + square vals in-place for spAx
+        square_inplace = True
+        # grad_preact = grad_z * (2 * z) — mask only, squaring done by spAx_squared
         _grad_relu2_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
             grad_z, z_sparse.vals, z_sparse.bitmask, z_sparse.prefix,
             z_sparse.vals_offset,
@@ -148,14 +149,13 @@ class FFNSpRelu2(Function):
             BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
             TILE_NUMEL=z_sparse.BLOCK_M * z_sparse.BLOCK_N,
             TILE_BYTES=z_sparse.BLOCK_M * z_sparse.BLOCK_N // 8,
-            num_warps=4, num_stages=2,
+            num_warps=4, num_stages=2, square=square_inplace
         )
-        grad_preact = grad_z
+        # grad_preact = grad_z
 
-        grad_W2 = spAx(z_sparse, grad_output.T)
-
-        grad_x = grad_preact @ W1
-        grad_W1 = grad_preact.T @ x
+        grad_W2 = spAx(z_sparse, grad_output.T, square=(not square_inplace))
+        grad_x = grad_z @ W1
+        grad_W1 = grad_z.T @ x
 
         return grad_x, grad_W1, grad_W2
 
@@ -215,9 +215,9 @@ def dense_to_tilesparse(dense: torch.Tensor, BLOCK_M=64, BLOCK_N=64) -> Bitspars
     )
 
 
-def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
+def spAx(x_sparse: BitsparseTensor, W: Tensor, square: bool = False) -> Tensor:
     """
-    y = W @ sparse_x.
+    y = W @ sparse_x.  If square=True, uses sparse_x^2 instead.
     x.shape = [M, N]
     W.shape = [K, M]
     """
@@ -244,6 +244,12 @@ def spAx(x_sparse: BitsparseTensor, W: Tensor) -> Tensor:
         num_warps=4, num_stages=2,
     )
 
-    return W @ dense
+    if square:
+        _square_dense_kernel[(grid_m, grid_n)](
+            dense, M, N,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            num_warps=4, num_stages=2,
+        )
 
+    return W @ dense
 
