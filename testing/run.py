@@ -79,7 +79,7 @@ class DeepFFN(nn.Module):
         return x
 
 
-def run_step(x, model, steps=1):
+def run_step(x, model, buffer_size, steps=1):
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats("cuda")
@@ -127,8 +127,9 @@ def evaluate():
     init_sparse_buffer(
         buffer_size, device="cuda", dtype=dtype,
     )
+    run_step(x, model, buffer_size, steps=1)
     # Main run
-    loss, grad_stds, vram, avg_time = run_step(x, model, steps=3)
+    loss, grad_stds, vram, avg_time = run_step(x, model, buffer_size, steps=3)
 
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
@@ -145,7 +146,7 @@ def run_base():
         # recompiles=True,
     )
 
-    # torch._functorch.config.activation_memory_budget = 0.8
+    torch._functorch.config.activation_memory_budget = 0.8
 
     evaluate()
 
