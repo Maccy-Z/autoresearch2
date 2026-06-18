@@ -163,7 +163,8 @@ class FFNSparse(Function):
 #         dense.shape
 #     )
 
-# @torch.compiler.disable()
+
+# @torch.compiler.disable
 def dense_to_tilesparse(
     dense: torch.Tensor,
     sparse_data: tuple[torch.Tensor, ...],
@@ -174,30 +175,19 @@ def dense_to_tilesparse(
     total_offset = offset[0].clone()
 
     tile_bitmasks, tile_prefix, my_offset, grid_m, grid_n, offset_inc = dense_to_tilesparse_op(
-        dense,
-        vals,
-        total_offset,
-        BLOCK_M,
-        BLOCK_N,
+        dense, vals, total_offset,
+        BLOCK_M, BLOCK_N,
     )
     offset.index_add_(
-            0,
-            torch.tensor([0], device="cuda"),
-            offset_inc.reshape(1),
+            0, torch.tensor([0], device="cuda"), offset_inc.reshape(1),
         )
 
     return BitsparseTensor(
-        vals,
-        tile_bitmasks,
-        tile_prefix,
-        my_offset,
-        grid_m,
-        grid_n,
-        BLOCK_M,
-        BLOCK_N,
+        vals, tile_bitmasks, tile_prefix, my_offset,
+        grid_m, grid_n, BLOCK_M, BLOCK_N,
         dense.shape,
     )
-#
+
 # @triton_op("bitsparse::dense_to_tilesparse", mutates_args={"vals"})
 def dense_to_tilesparse_op(
     dense: torch.Tensor,

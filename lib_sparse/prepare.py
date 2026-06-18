@@ -160,7 +160,7 @@ def run_base():
     #     recompiles=True,
     # )
 
-    torch._functorch.config.activation_memory_budget = 0.5
+    torch._functorch.config.activation_memory_budget = 0.1
 
     evaluate()
 
