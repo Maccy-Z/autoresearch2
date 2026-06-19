@@ -9,7 +9,7 @@ import logging
 from cprint import c_print
 
 from torch.utils.checkpoint import create_selective_checkpoint_contexts
-from forward_methods import FFNSparseDirect, FFNSparseDisabledPack, FFNSparseCustomFFN, FFNSparseCustomPack
+from forward_methods import FFNSparseDirect, FFNSparseCustomFFN
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -19,6 +19,7 @@ _global_vals: torch.Tensor = None
 _global_offset: torch.Tensor = None
 
 def init_sparse_buffer(size: int, device, dtype):
+    """Initialise global sparse-buffer state used by the debug benchmark."""
     global _global_vals, _global_offset, _global_counter
     # _global_vals = torch.empty(size, device=device, dtype=dtype)
     _global_offset = torch.zeros(1, device=device, dtype=torch.int32)
@@ -38,6 +39,7 @@ def get_globals():
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
+    """Create one FFN layer's W1 and W2 parameters with deterministic initialisation."""
     hdim = math.floor(dim * expansion)
     W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
     torch.nn.init.xavier_uniform_(W1, generator=G)
@@ -64,6 +66,7 @@ def checkpoint_context_fn():
 
 class DeepFFN(nn.Module):
     def __init__(self, dtype, layers=12, hidm=4096):
+        """Construct a stack of residual FFN layers for the memory benchmark."""
         super().__init__()
         G = torch.Generator(device="cuda").manual_seed(0)
         self.W1s, self.W2s = nn.ParameterList(), nn.ParameterList()
@@ -84,7 +87,7 @@ class DeepFFN(nn.Module):
 
     # @torch.no_grad()
     def forward_base(self, x, sparse_data, buffer_size):
-        """ x.shape = [BS, dim] """
+        """Run the residual FFN stack while allocating sparse storage for this pass."""
         sparse_data = [None, None]
         sparse_data[0] = torch.empty(buffer_size, device="cuda", dtype=torch.bfloat16)
         sparse_data[1] = torch.zeros(1, device="cuda", dtype=torch.int32)
@@ -94,6 +97,7 @@ class DeepFFN(nn.Module):
 
 
 def run_step(x, model, buffer_size, steps=1):
+    """Run forward/backward steps and return peak allocated VRAM plus average step time."""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats("cuda")
@@ -120,6 +124,7 @@ def run_step(x, model, buffer_size, steps=1):
 
 
 def evaluate():
+    """Build the benchmark model, run warmup and timed steps, and print memory results."""
     # Setup parameters
     hdim = 4096
     bs = 10_000
@@ -139,9 +144,9 @@ def evaluate():
     init_sparse_buffer(
         buffer_size, device="cuda", dtype=dtype,
     )
-    run_step(x, model, buffer_size, steps=1)
+    run_step(x, model, buffer_size, steps=2)
     # Main run
-    vram, avg_time = run_step(x, model, buffer_size, steps=3)
+    vram, avg_time = run_step(x, model, buffer_size, steps=5)
 
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
@@ -150,6 +155,7 @@ def evaluate():
 
 
 def run_base():
+    """Configure deterministic/debug settings and launch the benchmark."""
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
 
