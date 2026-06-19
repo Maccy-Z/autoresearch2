@@ -171,7 +171,12 @@ def grad_z_sparse_inplace(
     z_sparse: BitsparseTensor,
     BLOCK_K: int = 32,
 ) -> BitsparseTensor:
-    """Overwrite z_sparse values with grad_output @ W2 only at positions present in z_sparse."""
+    """ Combine grad_z = grad_output @ W2,
+                grad_z = grad_z * (z>0)
+                grad_z = sparse(grad_z)
+        Overwrite z_sparse values.
+    """
+
     M, N = z_sparse.shape
 
     TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
@@ -191,13 +196,10 @@ def grad_z_sparse_inplace(
 
 
 def ffn_backward_direct(
-    grad_output: torch.Tensor,
-    x: torch.Tensor,
-    W1: torch.Tensor,
-    W2: torch.Tensor,
-    z_sparse: BitsparseTensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute FFN gradients using a dense masked grad_z intermediate."""
+    grad_output: Tensor, z_sparse: BitsparseTensor, x: Tensor,
+    W1: Tensor, W2: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Compute FFN gradients."""
 
     grad_W2 = AspB_block(grad_output.T, z_sparse)
 
@@ -217,12 +219,9 @@ def ffn_backward_direct(
 
 
 def ffn_backward_sparse_grad_z(
-    grad_output: torch.Tensor,
-    x: torch.Tensor,
-    W1: torch.Tensor,
-    W2: torch.Tensor,
-    z_sparse: BitsparseTensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    grad_output: Tensor, z_sparse: BitsparseTensor, x: Tensor,
+    W1: Tensor, W2: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
     """Compute FFN gradients while keeping grad_z in the existing bit-sparse storage."""
     grad_W2 = AspB_block(grad_output.T, z_sparse)
 

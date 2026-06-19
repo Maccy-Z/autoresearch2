@@ -148,7 +148,7 @@ def _backward(ctx, grad_output: torch.Tensor):
     z_sparse = ctx.z_sparse
     ctx.z_sparse = None
 
-    grad_x, grad_W1, grad_W2 = BACKWARD_IMPL(grad_output, x, W1, W2, z_sparse)
+    grad_x, grad_W1, grad_W2 = BACKWARD_IMPL(grad_output, z_sparse, x, W1, W2)
     return grad_x, grad_W1, grad_W2, None
 
 
