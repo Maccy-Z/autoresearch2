@@ -94,6 +94,7 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
 
     return out
 
+
 def AspX(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     """
     y = A @ B_sparse.

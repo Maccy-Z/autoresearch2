@@ -14,3 +14,4 @@ build/
 results.tsv
 run.log
 results_*
+/torch_compile_debug/

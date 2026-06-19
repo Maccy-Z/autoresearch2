@@ -69,6 +69,7 @@ def _mask_with_bitmask_kernel(
     Each program covers one tile [BLOCK_M x BLOCK_N].  The 2-D grid
     iterates over all tiles of the M×N matrix.
     """
+
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     grid_n = tl.num_programs(1)
@@ -91,3 +92,5 @@ def _mask_with_bitmask_kernel(
     # Zero out gradient elements where the bitmask is 0 (in-place store).
     masked = tl.where(bits != 0, gz, 0.0)
     tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
+

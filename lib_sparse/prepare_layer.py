@@ -111,7 +111,7 @@ class FFNv2(Function):
 class FFNv3(Function):
     """ Recompute relu gradient """
     @staticmethod
-    def forward(ctx, x, W1, W2, e1):
+    def forward(ctx, x, W1, W2, e1=None):
         """
         out = relu(x @ W1.T) @ W2.T
 
