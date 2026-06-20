@@ -1,11 +1,13 @@
 import torch
 from torch import Tensor
+from torch import compile as torch_compile
 
 from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
     _grad_z_sparse_values_kernel
 from sparse_utils import BitsparseTensor
 
 
+@torch_compile
 def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
     """ y = A @ B_sparse. Done blockwise to reduce peak vram usage.
         A.shape = [K, M]
