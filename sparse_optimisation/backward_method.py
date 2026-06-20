@@ -163,12 +163,7 @@ def FFN_backward(ctx, grad_output: Tensor):
         z_sparse.shape[0], z_sparse.shape[1],
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         TILE_BYTES=z_sparse.BLOCK_M * z_sparse.BLOCK_N // 8,
-        num_warps=8, num_stages=2,
-    )
-
-    del z_sparse
-    if needs_x:
-        grad_x = grad_z @ W1
+        num_warps=4, num_stages=2,
     else:
         grad_x = None
 
