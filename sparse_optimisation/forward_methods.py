@@ -53,7 +53,7 @@ def _dense_to_tilesparse_pack_impl(
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=16, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return tile_bitmasks, layer_vals, layer_scales
