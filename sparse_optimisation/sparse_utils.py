@@ -38,8 +38,8 @@ class ValueBuffer:
             self.vals = torch.empty(self.byte_size, device=self.device, dtype=torch.int8)
             c_print(f'Values buffer: {self.vals.nbytes / (1024 ** 2):.1f}MB', color='green')
         if self.row_bitmask is None:
-            max_rows = 200000
-            max_row_bytes = 5000
+            max_rows = 120000
+            max_row_bytes = 3000
             self.row_bitmask = torch.empty(max_rows * max_row_bytes, device=self.device, dtype=torch.uint8)
             self.row_scales = torch.empty(max_rows, device=self.device, dtype=torch.float32)
             c_print(f'Bitmask buffer: {self.row_bitmask.nbytes / (1024 ** 2):.1f}MB', color='green')
