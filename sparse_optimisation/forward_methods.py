@@ -15,7 +15,7 @@ ROW_BYTES_PER = 0  # computed dynamically
 def _row_pack(dense: Tensor, sparse_data: ValueBuffer) -> RowSparseTensor:
     M, N = dense.shape
     ROW_BYTES = (N + 7) // 8
-    BLOCK_COLS = 256
+    BLOCK_COLS = 128
     stride_n = dense.stride(0)
 
     row_bitmask = torch.empty(M * ROW_BYTES, device=dense.device, dtype=torch.uint8)
@@ -26,7 +26,7 @@ def _row_pack(dense: Tensor, sparse_data: ValueBuffer) -> RowSparseTensor:
         M, N, stride_n,
         ROW_BYTES=ROW_BYTES,
         BLOCK_COLS=BLOCK_COLS,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
     row_offsets = torch.empty(M + 1, device=dense.device, dtype=torch.int32)
@@ -42,7 +42,7 @@ def _row_pack(dense: Tensor, sparse_data: ValueBuffer) -> RowSparseTensor:
         dense, row_offsets, vals_slice, scales_slice,
         M, N, stride_n,
         BLOCK_COLS=BLOCK_COLS,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
     sparse_data._offset += total_nnz

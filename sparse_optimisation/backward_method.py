@@ -20,7 +20,7 @@ def AspB(A: Tensor, B_sparse: RowSparseTensor, z_dense: Tensor) -> None:
     M, N = B_sparse.shape
 
     ROW_BYTES = (N + 7) // 8
-    BLOCK_COLS = 256
+    BLOCK_COLS = 128
 
     _row_unpack_kernel[(M,)](
         vals, row_bitmask, row_offsets, scales,
@@ -28,7 +28,7 @@ def AspB(A: Tensor, B_sparse: RowSparseTensor, z_dense: Tensor) -> None:
         M, N, N,
         ROW_BYTES=ROW_BYTES,
         BLOCK_COLS=BLOCK_COLS,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
     return A @ z_dense
