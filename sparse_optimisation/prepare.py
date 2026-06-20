@@ -166,7 +166,7 @@ def evaluate():
 
     # Run baseline
     run_step(x, model, sparse=False, steps=1)
-    tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=2)
+    tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
     print(f'{vram_dn = :.2f} MB, {avg_time=:.2f} ms')
     print("-"*50)
 
@@ -176,7 +176,7 @@ def evaluate():
     buffer = ValueBuffer(buffer_size, dtype=dtype, device="cuda")
     run_step(x, model, buffer, sparse=True, steps=1)
     # Main run
-    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=2)
+    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=3)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
 

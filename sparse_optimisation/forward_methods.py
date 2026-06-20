@@ -4,7 +4,7 @@ from torch.autograd import Function
 from torch.library import custom_op
 
 from backward_method import FFN_backward_sparse, FFN_backward
-from sparse_pack import _compact_vals_kernel, _tile_pack_kernel
+from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor, ValueBuffer
 
 
