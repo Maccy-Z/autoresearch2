@@ -43,6 +43,7 @@ class BitsparseTensor:
 class ValueBuffer:
     vals: Tensor = None
     scales: Tensor = None
+    offset: Tensor = None
 
     def __init__(self, size, device, dtype):
         self.byte_size = size * dtype.itemsize
@@ -58,4 +59,4 @@ class ValueBuffer:
             c_print(f'Scale buffer: {self.scales.nbytes / 1024}KB', color='green')
 
     def ready_buffer(self):
-        pass
+        self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
