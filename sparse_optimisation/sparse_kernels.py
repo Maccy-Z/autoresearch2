@@ -120,3 +120,34 @@ def _row_unpack_kernel(
         out = vals8.to(tl.float32) * scale
         tl.store(row_ptr + cols, out, mask=(cols < N) & (bits == 1))
         pos += nnz_chunk
+
+
+@triton.jit
+def _row_mask_kernel(
+    grad_ptr, row_bitmask_ptr,
+    M, N, stride_n,
+    ROW_BYTES: tl.constexpr,
+    BLOCK_COLS: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    if pid >= M:
+        return
+
+    row_ptr = grad_ptr + pid * stride_n
+
+    for col_block in range(0, N, BLOCK_COLS):
+        cols = col_block + tl.arange(0, BLOCK_COLS)
+        byte_base = col_block // 8
+
+        bm = tl.load(row_bitmask_ptr + pid * ROW_BYTES + byte_base +
+                     tl.arange(0, BLOCK_COLS // 8),
+                     mask=(byte_base + tl.arange(0, BLOCK_COLS // 8)) < ROW_BYTES,
+                     other=0).to(tl.int32)
+
+        bm_2d = tl.reshape(bm, (BLOCK_COLS // 8, 1))
+        bit_pos = tl.arange(0, 8)[None, :]
+        bits = tl.reshape((bm_2d >> bit_pos) & 1, (BLOCK_COLS,))
+
+        gz = tl.load(row_ptr + cols, mask=cols < N, other=0.0)
+        masked = tl.where(bits != 0, gz, 0.0)
+        tl.store(row_ptr + cols, masked, mask=cols < N)

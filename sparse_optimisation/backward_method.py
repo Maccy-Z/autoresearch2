@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 
-from sparse_kernels import _row_unpack_kernel
+from sparse_kernels import _row_unpack_kernel, _row_mask_kernel
 from sparse_utils import RowSparseTensor
 
 
@@ -45,7 +45,14 @@ def FFN_backward(ctx, grad_output: Tensor):
     grad_W2 = AspB(grad_output.T, z_sparse, z_dense)
 
     grad_z = grad_output @ W2
-    grad_z = torch.where(z_dense != 0, grad_z, torch.zeros_like(grad_z))
+    ROW_BYTES = (N + 7) // 8
+    _row_mask_kernel[(M,)](
+        grad_z, z_sparse.row_bitmask,
+        M, N, N,
+        ROW_BYTES=ROW_BYTES,
+        BLOCK_COLS=256,
+        num_warps=4, num_stages=2,
+    )
     del z_dense, z_sparse
 
     if needs_x:
