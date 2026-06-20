@@ -140,6 +140,8 @@ def grad_z_sparse_inplace(
         BLOCK_K=BLOCK_K,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
         num_warps=16, num_stages=2,
+    )
+    return z_sparse
 
 
 def _unpack_to_dense(t: BitsparseTensor) -> Tensor:
