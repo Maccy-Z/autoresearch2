@@ -18,11 +18,11 @@ def _row_pack(dense: Tensor, sparse_data: ValueBuffer) -> RowSparseTensor:
     BLOCK_COLS = 256
     stride_n = dense.stride(0)
 
+    row_bitmask = torch.empty(M * ROW_BYTES, device=dense.device, dtype=torch.uint8)
     row_counts = torch.empty(M, device=dense.device, dtype=torch.int32)
-    bm_slice = sparse_data.row_bitmask[:M * ROW_BYTES]
 
     _row_pack_count_kernel[(M,)](
-        dense, bm_slice, row_counts,
+        dense, row_bitmask, row_counts,
         M, N, stride_n,
         ROW_BYTES=ROW_BYTES,
         BLOCK_COLS=BLOCK_COLS,
@@ -46,7 +46,7 @@ def _row_pack(dense: Tensor, sparse_data: ValueBuffer) -> RowSparseTensor:
     )
 
     sparse_data._offset += total_nnz
-    return RowSparseTensor(vals_slice, bm_slice, row_offsets, scales_slice, dense.shape)
+    return RowSparseTensor(vals_slice, row_bitmask, row_offsets, scales_slice, dense.shape)
 
 
 class FFNSparse(Function):
