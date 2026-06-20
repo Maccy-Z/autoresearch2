@@ -147,6 +147,45 @@ def _unpack_batch_kernel(
 
 
 @triton.jit
+def _unpack_batch_2tile_kernel(
+    vals_ptr, bitmask_ptr, prefix_ptr,
+    layer_offset_ptr,
+    dense_ptr,
+    first_m_tile, grid_n_sparse, K, batch_rows,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    base_tile_id = pid * 2
+
+    offset = tl.load(layer_offset_ptr)
+
+    for t in range(2):
+        tile_id = base_tile_id + t
+        row_tile = tile_id // grid_n_sparse
+        k_tile = tile_id % grid_n_sparse
+        row_rel = row_tile - first_m_tile
+
+        byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+        bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+        bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+        bit_pos = tl.arange(0, 8)[None, :]
+        bits = (bytes_2d >> bit_pos) & 1
+        mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
+
+        base = tl.load(prefix_ptr + tile_id) + offset
+        ranks = tl.cumsum(mask_bits, 0) - 1
+        v = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
+        v_2d = tl.reshape(v, (BLOCK_M, BLOCK_N))
+
+        row_base = row_rel * BLOCK_M
+        offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
+        offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+        offs = offs_m * K + offs_k
+        tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
+
+
+@triton.jit
 def _mask_with_bitmask_kernel(
     grad_ptr, bitmask_ptr,
     M, N,
