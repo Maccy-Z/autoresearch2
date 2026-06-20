@@ -59,6 +59,42 @@ def _tile_pack_kernel(
     tl.store(tile_counts_ptr + pid, nnz)
 
 
+@triton.jit
+def _tile_pack_int8_kernel(
+    dense_ptr,
+    tile_bitmasks_ptr,
+    tile_vals_ptr,
+    tile_scales_ptr,
+    M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    pid = pid_m * tl.num_programs(1) + pid_n
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    tile = tl.load(dense_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+
+    tile_flat = tl.reshape(tile, (TILE_NUMEL,))
+    nz = (tile_flat > 0.0)
+
+    nz_reshaped = tl.reshape(nz, (TILE_BYTES, 8))
+    bit_weights = tl.arange(0, 8)[None, :]
+    bytes_val = tl.sum(nz_reshaped.to(tl.int32) << bit_weights, 1).to(tl.uint8)
+    tl.store(tile_bitmasks_ptr + pid * TILE_BYTES + tl.arange(0, TILE_BYTES), bytes_val)
+
+    tile_max = tl.max(tl.abs(tile_flat))
+    scale = tile_max / 127.0
+    scale = tl.maximum(scale, 1e-6)
+    quantized = (tile_flat / scale).to(tl.int32)
+    quantized = tl.minimum(tl.maximum(quantized, -128), 127)
+    tl.store(tile_vals_ptr + pid * TILE_NUMEL + tl.arange(0, TILE_NUMEL), quantized.to(tl.int8))
+    tl.store(tile_scales_ptr + pid, scale)
+
+
 # ---------------------------------------------------------------------------
 # Kernel 2 — compact: scatter each tile's nonzeros into a single contiguous
 #            vals array using the precomputed prefix offsets
@@ -138,6 +174,32 @@ def _unpack_batch_kernel(
     # Reshape the flat result back to [BLOCK_M, BLOCK_N] and write into the
     # dense batch buffer at the correct (row, col) position.
     v_2d = tl.reshape(v, (BLOCK_M, BLOCK_N))
+
+    row_base = row_tile_in_batch * BLOCK_M
+    offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
+    offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+    offs = offs_m * K + offs_k
+    tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
+
+
+@triton.jit
+def _unpack_batch_int8_kernel(
+    vals_ptr, scales_ptr,
+    dense_ptr,
+    first_m_tile, grid_n_sparse, K, batch_rows,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    row_tile_in_batch = pid // grid_n_sparse
+    k_tile = pid % grid_n_sparse
+    orig_row_tile = first_m_tile + row_tile_in_batch
+    tile_id = orig_row_tile * grid_n_sparse + k_tile
+
+    scale = tl.load(scales_ptr + tile_id)
+    vals8 = tl.load(vals_ptr + tile_id * TILE_NUMEL + tl.arange(0, TILE_NUMEL))
+    v_flat = vals8.to(tl.float32) * scale
+    v_2d = tl.reshape(v_flat, (BLOCK_M, BLOCK_N))
 
     row_base = row_tile_in_batch * BLOCK_M
     offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]

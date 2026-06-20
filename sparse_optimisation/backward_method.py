@@ -1,8 +1,8 @@
 import torch
 from torch import Tensor
 
-from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
-    _grad_z_sparse_values_kernel
+from sparse_kernels import _unpack_batch_int8_kernel, _mask_with_bitmask_kernel, \
+    _grad_z_sparse_values_kernel, _unpack_batch_kernel
 from sparse_utils import BitsparseTensor
 
 
@@ -49,32 +49,23 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=20000) -> Tensor:
 
 
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
-    """
-    y = A @ B_sparse.
-    A.shape = [K, M]
-    B.shape = [M, N]
-    """
     vals = B_sparse.vals
-    bitmask = B_sparse.bitmask
-    prefix = B_sparse.prefix
+    scales = B_sparse.scales
     BLOCK_M, BLOCK_N = B_sparse.BLOCK_M, B_sparse.BLOCK_N
     grid_m, grid_n = B_sparse.grid_m, B_sparse.grid_n
     M, N = B_sparse.shape
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-
     num_tiles = grid_m * grid_n
-    dense = torch.empty(M, N, device=A.device, dtype=vals.dtype)
+    dense = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
 
-    _unpack_batch_kernel[(num_tiles,)](
-        vals, bitmask, prefix,
-        B_sparse.vals_offset,
+    _unpack_batch_int8_kernel[(num_tiles,)](
+        vals, scales,
         dense,
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=16, num_stages=2,
+        TILE_NUMEL=TILE_NUMEL,
+        num_warps=8, num_stages=2,
     )
 
     return A @ dense
