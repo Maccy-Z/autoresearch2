@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 
-from sparse_optimisation.sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
+from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
     _grad_z_sparse_values_kernel
 from sparse_utils import BitsparseTensor
 
