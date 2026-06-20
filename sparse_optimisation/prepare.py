@@ -167,7 +167,7 @@ def evaluate():
     # Run baseline
     run_step(x, model, sparse=False, steps=1)
     tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
-    print(f'{vram_dn = :.2f} MB, {avg_time=:.2f} ms')
+    print(f'Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms')
     print("-"*50)
 
     # Setup sparse buffer and run model
@@ -178,7 +178,7 @@ def evaluate():
     # Main run
     tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=3)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
-    print(f'{avg_time = :.2f} ms')
+    print(f'Total time: {avg_time:.2f} ms')
 
     # Check correctness
     if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
