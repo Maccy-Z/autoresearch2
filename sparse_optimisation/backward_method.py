@@ -121,17 +121,20 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
 
 def grad_z_sparse_inplace(
     grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
-    BLOCK_K: int = 128,
+    BLOCK_K: int = 32,
 ) -> BitsparseTensor:
-    """ grad_z = (grad_output @ W2) ⊙ (z>0), written sparsely in-place. """
+    """ Combine grad_z = grad_output @ W2,
+                grad_z = grad_z * (z>0)
+                grad_z = sparse(grad_z)
+        Overwrite z_sparse values.
+    """
 
     M, N = z_sparse.shape
-    W2_T = W2.T.contiguous()
 
     TILE_NUMEL = z_sparse.BLOCK_M * z_sparse.BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
     _grad_z_sparse_values_kernel[(z_sparse.grid_m, z_sparse.grid_n)](
-        grad_output, W2_T,
+        grad_output, W2,
         z_sparse.bitmask, z_sparse.prefix, z_sparse.vals_offset,
         z_sparse.vals,
         M, N, z_sparse.grid_n,
@@ -139,29 +142,9 @@ def grad_z_sparse_inplace(
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         BLOCK_K=BLOCK_K,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=16, num_stages=2,
+        num_warps=8, num_stages=3,
     )
     return z_sparse
-
-
-def _unpack_to_dense(t: BitsparseTensor) -> Tensor:
-    """Unpack a BitsparseTensor to a dense [M,N] bf16 tensor."""
-    M, N = t.shape
-    BLOCK_M, BLOCK_N = t.BLOCK_M, t.BLOCK_N
-    TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-    num_tiles = t.grid_m * t.grid_n
-
-    dense = torch.empty(M, N, device=t.vals.device, dtype=torch.bfloat16)
-    _unpack_batch_kernel[(num_tiles,)](
-        t.vals, t.bitmask, t.prefix, t.vals_offset,
-        dense,
-        0, t.grid_n, N, M,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
-    )
-    return dense
 
 
 def FFN_backward(ctx, grad_output: Tensor):
@@ -194,7 +177,7 @@ def FFN_backward(ctx, grad_output: Tensor):
 
 
 def FFN_backward_sparse(ctx, grad_output: Tensor):
-    """Sparse grad_z in-place, then unpack once for dense matmuls."""
+    """Compute FFN gradients while keeping grad_z in the existing bit-sparse storage."""
     x, W1, W2 = ctx.saved_tensors
     z_sparse = ctx.z_sparse
     ctx.z_sparse = None
@@ -203,15 +186,10 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     grad_W2 = AspB(grad_output.T, z_sparse)
     grad_z_sparse = grad_z_sparse_inplace(grad_output, W2, z_sparse)
     del z_sparse
+    grad_W1 = AspB_block(x.T, grad_z_sparse).T
 
-    grad_z_dense = _unpack_to_dense(grad_z_sparse)
-    del grad_z_sparse
-
-    grad_W1 = grad_z_dense.T @ x
     if needs_x:
-        grad_x = grad_z_dense @ W1
+        grad_x = spAB(grad_z_sparse, W1)
     else:
         grad_x = None
-    del grad_z_dense
-
     return grad_x, grad_W1, grad_W2, None

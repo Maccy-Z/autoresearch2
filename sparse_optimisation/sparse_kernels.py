@@ -201,22 +201,20 @@ def _mask_with_bitmask_kernel(
 #   Computes sparse grad_z = (∂L/∂Y) @ W₂, masked by the ReLU activation
 #   pattern, and writes the result into the existing sparse vals buffer.
 #
-#   W₂_T is pre-transposed to [N, D] for coalesced memory access.
-#   Early-exits when a tile has no nonzero entries.
-#
-#   For each tile t with nnz > 0:
+#   For each tile t:
 #     acc = 0
 #     for k_block in 0..D step BLOCK_K:
-#         acc += ∂L/∂Y[row_slice, k_slice] @ transpose(W₂_T[col_slice, k_slice])
+#         acc += ∂L/∂Y[row_slice, k_slice] @ W₂[k_slice, col_slice]
 #     for each nonzero position i in tile t:
 #         vals[tile_start + rank[i]] = acc[i]
 #
-#   Fuses:  grad_z = (∂L/∂Y @ W₂) ⊙ (Z > 0)  with output kept sparse.
+#   This fuses three operations into one kernel:
+#     grad_z = (∂L/∂Y @ W₂) ⊙ (Z > 0)   with output kept sparse.
 # ═══════════════════════════════════════════════════════════════════════════════
 @triton.jit
 def _grad_z_sparse_values_kernel(
     grad_output_ptr,    # input:  ∂L/∂Y ∈ R^{M×D}
-    W2_T_ptr,           # input:  W₂^T ∈ R^{N×D}  (pre-transposed for coalesced loads)
+    W2_ptr,             # input:  W₂ ∈ R^{D×N}
     bitmask_ptr,        # input:  uint8 packed bitmasks
     prefix_ptr,         # input:  int32[n_tiles+1] exclusive prefix sum
     vals_offset_ptr,    # input:  int32[1] global offset for this layer
@@ -231,14 +229,11 @@ def _grad_z_sparse_values_kernel(
     pid_n = tl.program_id(1)
     tile_id = pid_m * grid_n + pid_n
 
-    nnz_tile = tl.load(prefix_ptr + tile_id + 1) - tl.load(prefix_ptr + tile_id)
-    if nnz_tile == 0:
-        return
-
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, BLOCK_K)
 
+    # Blocked matrix multiplication:  acc += ∂L/∂Y[BM,D] @ W₂[D,BN]
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k_start in range(0, D, BLOCK_K):
         k = k_start + offs_k
@@ -247,13 +242,14 @@ def _grad_z_sparse_values_kernel(
             mask=(offs_m[:, None] < M) & (k[None, :] < D),
             other=0.0,
         )
-        w2_block = tl.load(
-            W2_T_ptr + offs_n[:, None] * D + k[None, :],
-            mask=(offs_n[:, None] < N) & (k[None, :] < D),
+        w2 = tl.load(
+            W2_ptr + k[:, None] * N + offs_n[None, :],
+            mask=(k[:, None] < D) & (offs_n[None, :] < N),
             other=0.0,
         )
-        acc += tl.dot(go, tl.trans(w2_block))
+        acc += tl.dot(go, w2)
 
+    # Mask acc by bitmask and scatter into compact buffer.
     byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
     bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
     bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))

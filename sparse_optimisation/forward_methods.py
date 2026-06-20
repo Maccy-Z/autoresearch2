@@ -3,14 +3,14 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import FFN_backward
+from backward_method import FFN_backward, FFN_backward_sparse
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor, ValueBuffer
 
 
 DEFAULT_BLOCK_M = 128
 DEFAULT_BLOCK_N = 128
-BACKWARD_IMPL = FFN_backward
+BACKWARD_IMPL = FFN_backward_sparse
 
 
 def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
