@@ -59,4 +59,4 @@ class ValueBuffer:
             c_print(f'Scale buffer: {self.scales.nbytes / 1024}KB', color='green')
 
     def ready_buffer(self):
-        self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
+        self._offset = 0
