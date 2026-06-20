@@ -8,7 +8,7 @@ from sparse_utils import BitsparseTensor
 
 
 @torch_compile
-def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
+def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=4096) -> Tensor:
     """ y = A @ B_sparse. Done blockwise to reduce peak vram usage.
         A.shape = [K, M]
         B.shape = [M, N]
