@@ -136,7 +136,7 @@ def evaluate():
     # Warmup
     run_step(x, model, sparse=True, steps=2)
     # Main run
-    loss, grad_stds, vram, avg_time = run_step(x, model, sparse=True, steps=1)
+    loss, grad_stds, vram, avg_time = run_step(x, model, sparse=True, steps=2)
 
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')

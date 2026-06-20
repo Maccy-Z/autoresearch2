@@ -1,44 +1,12 @@
-from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
-
 import time
 import math
 import gc
 import torch._logging
-import logging
-from cprint import c_print
 
-from forward_methods import FFNSparse, FFNSparseCustomOp
+from forward_methods import FFNSparse, FFNSparseCustomOp, ValueBuffer
 from lib_sparse.prepare_layer import FFNv1, FFNv2, FFNv3
-
-if TYPE_CHECKING:
-    from torch import Tensor
-
-
-
-# ------------------- Global value buffer ------------------------------------
-_global_vals: torch.Tensor = None
-_global_offset: torch.Tensor = None
-
-def init_sparse_buffer(size: int, device, dtype):
-    """Initialise global sparse-buffer state used by the debug benchmark."""
-    global _global_vals, _global_offset, _global_counter
-    _global_vals = torch.empty(size, device=device, dtype=dtype)
-    _global_offset = torch.zeros(1, device=device, dtype=torch.int32)
-    #
-    c_print(f'Global buffer: {_global_vals.nbytes/(1024**2)}MB', color='green')
-    c_print(f'Maximum number of elements: {_global_vals.numel()}', color='green')
-
-
-def reset_sparse_globals():
-    global _global_offset
-    if _global_offset is not None:
-        _global_offset.zero_()
-
-
-def get_globals():
-    return [_global_vals, _global_offset]
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
@@ -68,43 +36,51 @@ class DeepFFN(nn.Module):
             self.W1s.append(nn.Parameter(W1))
             self.W2s.append(nn.Parameter(W2))
 
+        # Simulate hook-based efficient optimiser, that applies gradient update as soon as possible and clears grads.
+        self.setup_hooks()
+
+    @staticmethod
+    def hook(w):
+        w.grad = None
+        return
+
+    def setup_hooks(self):
+        for n, p in self.named_parameters():
+            p.register_post_accumulate_grad_hook(self.hook)
+
     @torch.compile
     def forward_base(self, x):
         """ x.shape = [BS, dim] """
         for W1, W2 in zip(self.W1s, self.W2s):
-            # x_inner = F.rms_norm(x, x.shape[-1:])
             x_inner = x
             x = x + FFNv3.apply(x_inner, W1, W2)
         return x
 
     # @torch.compile
-    def forward(self, x, sparse_data, buffer_size):
+    def forward(self, x, buffer: ValueBuffer):
         """Run the residual FFN stack while allocating sparse storage for this pass."""
-        sparse_data = [sparse_data[0], None]
-        # sparse_data[0] = torch.empty(buffer_size, device="cuda", dtype=torch.bfloat16)
-        sparse_data[1] = torch.zeros(1, device="cuda", dtype=torch.int32)
+        buffer.ready_buffer()
         for W1, W2 in zip(self.W1s, self.W2s):
-            # x_inner = F.rms_norm(x, x.shape[-1:])
             x_inner = x
-            x = x + FFNSparse.apply(x_inner, W1, W2, sparse_data)
+            x = x + FFNSparse.apply(x_inner, W1, W2, buffer)
         return x
 
 
-def run_step(x, model, buffer_size=None, sparse=False, steps=1):
+def run_step(x, model, buffer: ValueBuffer=None, sparse=False, steps=1):
     """Run forward/backward steps and return peak allocated VRAM plus average step time."""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats("cuda")
 
-    sparse_data = get_globals()
+    if buffer is not None:
+        buffer.init_buffer()
     start = time.perf_counter()
 
     for _ in range(steps):
         model.zero_grad()
-        reset_sparse_globals()
         if sparse:
-            y = model.forward(x, sparse_data, buffer_size)
+            y = model.forward(x, buffer)
         else:
             y = model.forward_base(x)
 
@@ -123,7 +99,6 @@ def run_step(x, model, buffer_size=None, sparse=False, steps=1):
         if p.grad is not None:
             tracking.append(p.grad.std().cpu())
     tracking = torch.stack(tracking) * 1e3
-
     return tracking, allocated, avg_time
 
 
@@ -132,7 +107,7 @@ def evaluate():
     # Setup parameters
     hdim = 4096
     bs = 10_000
-    layers = 1
+    layers = 16
     dtype = torch.bfloat16
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
@@ -150,12 +125,10 @@ def evaluate():
     # Setup sparse buffer and run model
     hdim_expanded = math.floor(hdim * 5.25)
     buffer_size = int(bs * hdim_expanded * layers * 0.55)
-    init_sparse_buffer(
-        buffer_size, device="cuda", dtype=dtype,
-    )
-    run_step(x, model, buffer_size, sparse=True, steps=1)
+    buffer = ValueBuffer(buffer_size, dtype=dtype, device="cuda")
+    run_step(x, model, buffer, sparse=True, steps=1)
     # Main run
-    tracking, vram, avg_time = run_step(x, model, buffer_size, sparse=True, steps=2)
+    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=2)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'{avg_time = :.2f} ms')
 

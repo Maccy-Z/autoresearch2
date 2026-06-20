@@ -3,7 +3,8 @@ from torch import Tensor
 import triton
 import triton.language as tl
 
-from test_sparse import BitsparseTensor, _mask_with_bitmask_kernel, _unpack_batch_kernel
+from sparse_unpack import _mask_with_bitmask_kernel, _unpack_batch_kernel
+from prepare_utils import BitsparseTensor
 
 
 @triton.jit
