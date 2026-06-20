@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 
 from sparse_unpack import _mask_with_bitmask_kernel, _unpack_batch_kernel, _grad_z_sparse_values_kernel
-from prepare_utils import BitsparseTensor
+from sparse_utils import BitsparseTensor
 
 
 def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
