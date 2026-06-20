@@ -4,7 +4,7 @@ from torch.autograd import Function
 from torch.library import custom_op
 
 from backward_method import FFN_backward_sparse, FFN_backward
-from sparse_kernels import _tile_pack_int8_kernel
+from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor, ValueBuffer
 
 
@@ -24,40 +24,57 @@ def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, in
 
 
 def _make_bitsparse(
-    vals: Tensor, bitmask: Tensor, scales: Tensor,
+    vals: Tensor, bitmask: Tensor, prefix: Tensor,
+    vals_offset: Tensor,
     shape: tuple[int, int], BLOCK_M: int, BLOCK_N: int,
 ) -> BitsparseTensor:
+    """Build a BitsparseTensor wrapper around packed values, bitmasks, and prefixes."""
     grid_m = (shape[0] + BLOCK_M - 1) // BLOCK_M
     grid_n = (shape[1] + BLOCK_N - 1) // BLOCK_N
     return BitsparseTensor(
-        vals, bitmask, scales,
+        vals, bitmask, prefix, vals_offset,
         grid_m, grid_n, BLOCK_M, BLOCK_N,
         shape,
     )
 
 
 def _dense_to_tilesparse_pack_impl(
-    dense: Tensor, vals: Tensor, scales: Tensor, layer_offset: int,
+    dense: Tensor, vals: Tensor, offset: Tensor,
     BLOCK_M: int = DEFAULT_BLOCK_M,
     BLOCK_N: int = DEFAULT_BLOCK_N,
 ) -> tuple[Tensor, Tensor, Tensor]:
+    """Pack a dense matrix into tile-sparse metadata and append values into the shared buffer."""
     M, N = dense.shape
     grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N, BLOCK_M, BLOCK_N)
 
+    tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
-    layer_size = num_tiles * TILE_NUMEL
-    layer_vals = vals[layer_offset:layer_offset + layer_size]
-    layer_scales = scales[:num_tiles]
 
-    _tile_pack_int8_kernel[(grid_m, grid_n)](
-        dense, tile_bitmasks, layer_vals, layer_scales,
+    _tile_pack_kernel[(grid_m, grid_n)](
+        dense, tile_counts, tile_bitmasks,
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
-    return tile_bitmasks, layer_vals, layer_scales
+    total_offset = offset.clone()
+
+    tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
+    torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
+    tile_prefix[0] = 0
+
+    _compact_vals_kernel[(num_tiles,)](
+        dense, tile_prefix, vals,
+        total_offset,
+        M, N, grid_n,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        TILE_NUMEL=TILE_NUMEL,
+        num_warps=16, num_stages=2,
+    )
+
+    offset.add_(tile_prefix[-1])
+    return tile_bitmasks, tile_prefix, total_offset
 
 
 @torch.compile
@@ -67,15 +84,12 @@ def dense_to_tilesparse(
     BLOCK_M: int = DEFAULT_BLOCK_M,
     BLOCK_N: int = DEFAULT_BLOCK_N,
 ) -> BitsparseTensor:
-    vals = sparse_data.vals
-    scales = sparse_data.scales
-    offset = sparse_data._offset
-    _, _, num_tiles, TILE_NUMEL, _ = _tile_grid(dense.shape[0], dense.shape[1], BLOCK_M, BLOCK_N)
-    bitmask, tile_vals, tile_scales = _dense_to_tilesparse_pack_impl(
-        dense, vals, scales, offset, BLOCK_M, BLOCK_N
+    """Convert a dense activation matrix into a BitsparseTensor backed by sparse_data."""
+    vals, offset = sparse_data.vals, sparse_data.offset
+    bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
+        dense, vals, offset, BLOCK_M, BLOCK_N
     )
-    sparse_data._offset += num_tiles * TILE_NUMEL
-    return _make_bitsparse(tile_vals, bitmask, tile_scales, dense.shape, BLOCK_M, BLOCK_N)
+    return _make_bitsparse(vals, bitmask, prefix, vals_offset, dense.shape, BLOCK_M, BLOCK_N)
 
 
 @custom_op("bitsparse_forward_methods::ffn_sparse_forward", mutates_args={"vals", "offset"})
