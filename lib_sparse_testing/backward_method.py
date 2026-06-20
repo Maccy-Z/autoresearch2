@@ -8,11 +8,8 @@ from test_sparse import BitsparseTensor, _mask_with_bitmask_kernel, _unpack_batc
 
 @triton.jit
 def _grad_z_sparse_values_kernel(
-    grad_output_ptr,
-    W2_ptr,
-    bitmask_ptr,
-    prefix_ptr,
-    vals_offset_ptr, vals_out_ptr,
+    grad_output_ptr, W2_ptr, bitmask_ptr,
+    prefix_ptr, vals_offset_ptr, vals_out_ptr,
     M, N, grid_n,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
@@ -70,12 +67,13 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
 
-    out = torch.empty(K, N, device=A.device, dtype=A.dtype)
+    out = torch.zeros(K, N, device=A.device, dtype=A.dtype)
 
-    for m_start in range(0, M, row_batch):
-        m_end = min(m_start + row_batch, M)
+    row_tiles_per_batch = max(1, row_batch // BLOCK_M)
+    for first_m_tile in range(0, B_sparse.grid_m, row_tiles_per_batch):
+        m_start = first_m_tile * BLOCK_M
+        m_end = min(m_start + row_tiles_per_batch * BLOCK_M, M)
         batch_rows = m_end - m_start
-        first_m_tile = m_start // BLOCK_M
         num_row_tiles = (batch_rows + BLOCK_M - 1) // BLOCK_M
         num_tiles_in_batch = num_row_tiles * grid_n
 
@@ -95,7 +93,7 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
     return out
 
 
-def AspX(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
+def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     """
     y = A @ B_sparse.
     A.shape = [K, M]
@@ -167,9 +165,7 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
 
 
 def grad_z_sparse_inplace(
-    grad_output: torch.Tensor,
-    W2: torch.Tensor,
-    z_sparse: BitsparseTensor,
+    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
     BLOCK_K: int = 32,
 ) -> BitsparseTensor:
     """ Combine grad_z = grad_output @ W2,
@@ -196,11 +192,12 @@ def grad_z_sparse_inplace(
     return z_sparse
 
 
-def ffn_backward_direct(
-    grad_output: Tensor, z_sparse: BitsparseTensor, x: Tensor,
-    W1: Tensor, W2: Tensor,
-) -> tuple[Tensor, Tensor, Tensor]:
+def FFN_backward(ctx, grad_output: Tensor):
     """Compute FFN gradients."""
+    x, W1, W2 = ctx.saved_tensors
+    z_sparse = ctx.z_sparse
+    ctx.z_sparse = None
+    needs_x = ctx.needs_input_grad[0]
 
     grad_W2 = AspB_block(grad_output.T, z_sparse)
 
@@ -214,20 +211,31 @@ def ffn_backward_direct(
         num_warps=4, num_stages=2,
     )
 
-    grad_x = grad_z @ W1
+    del z_sparse
+    if needs_x:
+        grad_x = grad_z @ W1
+    else:
+        grad_x = None
+
     grad_W1 = grad_z.T @ x
-    return grad_x, grad_W1, grad_W2
+    return grad_x, grad_W1, grad_W2, None
 
 
-def ffn_backward_sparse_grad_z(
-    grad_output: Tensor, z_sparse: BitsparseTensor, x: Tensor,
-    W1: Tensor, W2: Tensor,
-) -> tuple[Tensor, Tensor, Tensor]:
+def FFN_backward_sparse(ctx, grad_output: Tensor):
     """Compute FFN gradients while keeping grad_z in the existing bit-sparse storage."""
-    grad_W2 = AspB_block(grad_output.T, z_sparse)
+    x, W1, W2 = ctx.saved_tensors
+    z_sparse = ctx.z_sparse
+    ctx.z_sparse = None
+    needs_x = ctx.needs_input_grad[0]
 
+    grad_W2 = AspB_block(grad_output.T, z_sparse)
     # Compute (grad_output @ W2)*relu_grad. Return sparse format
     grad_z_sparse = grad_z_sparse_inplace(grad_output, W2, z_sparse)
+    del z_sparse
     grad_W1 = AspB_block(x.T, grad_z_sparse).T
-    grad_x = spAB(grad_z_sparse, W1)
-    return grad_x, grad_W1, grad_W2
+
+    if needs_x:
+        grad_x = spAB(grad_z_sparse, W1)
+    else:
+        grad_x = None
+    return grad_x, grad_W1, grad_W2, None

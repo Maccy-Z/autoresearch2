@@ -52,7 +52,7 @@ def _unpack_batch_kernel(
     offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
     offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
     offs = offs_m * K + offs_k
-    tl.store(dense_ptr + offs, v_2d, mask=offs_m < batch_rows)
+    tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
 
 
 @triton.jit
@@ -92,5 +92,4 @@ def _mask_with_bitmask_kernel(
     # Zero out gradient elements where the bitmask is 0 (in-place store).
     masked = tl.where(bits != 0, gz, 0.0)
     tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
-
 

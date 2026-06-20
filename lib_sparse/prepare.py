@@ -96,7 +96,6 @@ def run_step(x, model, sparse, steps=1):
         loss = (y - x).pow(2).mean()
         # VRAM usage
         # allocated = torch.cuda.memory_allocated("cuda") / 1024**2
-        print(f'{sparse_data[1] = }')
 
         loss.backward()
 
@@ -124,9 +123,9 @@ def evaluate():
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
     model = DeepFFN(layers=layers, dtype=dtype)
 
-    # # Dense exact solution
-    # loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, sparse=False, steps=1)
-    # print(f'{vram_dn = :.2f} MB')
+    # Dense exact solution
+    loss_dn, grad_stds_dn, vram_dn, _ = run_step(x, model, sparse=False, steps=1)
+    print(f'{vram_dn = :.2f} MB')
 
     # Our model
     # Setup sparse buffer
@@ -160,7 +159,7 @@ def run_base():
     #     recompiles=True,
     # )
 
-    torch._functorch.config.activation_memory_budget = 0.1
+    # torch._functorch.config.activation_memory_budget = 0.1
 
     evaluate()
 

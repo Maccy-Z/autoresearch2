@@ -3,6 +3,12 @@ import torch.nn.functional as F
 import torch
 
 
+def _relu_backward_mask_inplace_(grad, z):
+    return torch.ops.aten.threshold_backward.grad_input(
+        grad, z, 0, grad_input=grad
+    )
+
+
 class FFNrelu2:
     @staticmethod
     def apply(x, W1, W2):
@@ -122,16 +128,17 @@ class FFNv3(Function):
         returns:
             output: (BS, dim)
         """
-        preact = x @ W1.T           # shape = [BS, exp_fact*in_dim]
-        z = F.relu(preact)
+        z = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        z.relu_()
         output = z @ W2.T           # shape = [BS, dim]
-
+        # print(f'{z.nbytes/1024**2 = :.2f} MB')
         ctx.save_for_backward(x, W1, W2, z)
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
         x, W1, W2, z = ctx.saved_tensors
+        needs_x = ctx.needs_input_grad[0]
 
         # output = z @ W2.T
         # grad_output.shape = [BS, dim]
@@ -140,10 +147,16 @@ class FFNv3(Function):
         grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
 
         # z = relu(preact)
-        grad_preact = grad_z * (z>0)
+        grad_preact = _relu_backward_mask_inplace_(grad_z, z)
+        if not torch.compiler.is_compiling():
+            ctx.maybe_clear_saved_tensors()
+        del z
 
         # preact = x @ W1.T
-        grad_x = grad_preact @ W1          # [BS, dim]
+        grad_x = None
+        if needs_x:
+            grad_x = grad_preact @ W1          # [BS, dim]
+
         grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2, None, None

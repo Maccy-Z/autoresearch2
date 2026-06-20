@@ -3,17 +3,14 @@ import torch.nn.functional as F
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import ffn_backward_sparse_grad_z
-from test_sparse import (
-    BitsparseTensor,
-    _compact_vals_kernel,
-    _tile_pack_kernel,
-)
+from backward_method import FFN_backward_sparse, FFN_backward
+from test_sparse import BitsparseTensor, _compact_vals_kernel, _tile_pack_kernel
+from torch import Tensor
 
 
-DEFAULT_BLOCK_M = 64
-DEFAULT_BLOCK_N = 64
-BACKWARD_IMPL = ffn_backward_sparse_grad_z
+DEFAULT_BLOCK_M = 128
+DEFAULT_BLOCK_N = 128
+BACKWARD_IMPL = FFN_backward
 
 
 def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
@@ -27,13 +24,9 @@ def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, in
 
 
 def _make_bitsparse(
-    vals: torch.Tensor,
-    bitmask: torch.Tensor,
-    prefix: torch.Tensor,
-    vals_offset: torch.Tensor,
-    shape: tuple[int, int],
-    BLOCK_M: int,
-    BLOCK_N: int,
+    vals: Tensor, bitmask: Tensor, prefix: Tensor,
+    vals_offset: Tensor,
+    shape: tuple[int, int], BLOCK_M: int, BLOCK_N: int,
 ) -> BitsparseTensor:
     """Build a BitsparseTensor wrapper around packed values, bitmasks, and prefixes."""
     grid_m = (shape[0] + BLOCK_M - 1) // BLOCK_M
@@ -46,12 +39,10 @@ def _make_bitsparse(
 
 
 def _dense_to_tilesparse_pack_impl(
-    dense: torch.Tensor,
-    vals: torch.Tensor,
-    offset: torch.Tensor,
+    dense: Tensor, vals: Tensor, offset: Tensor,
     BLOCK_M: int = DEFAULT_BLOCK_M,
     BLOCK_N: int = DEFAULT_BLOCK_N,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """Pack a dense matrix into tile-sparse metadata and append values into the shared buffer."""
     M, N = dense.shape
     grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N, BLOCK_M, BLOCK_N)
@@ -87,8 +78,8 @@ def _dense_to_tilesparse_pack_impl(
 
 
 def dense_to_tilesparse(
-    dense: torch.Tensor,
-    sparse_data: tuple[torch.Tensor, torch.Tensor],
+    dense: Tensor,
+    sparse_data: tuple[Tensor, Tensor],
     BLOCK_M: int = DEFAULT_BLOCK_M,
     BLOCK_N: int = DEFAULT_BLOCK_N,
 ) -> BitsparseTensor:
@@ -102,14 +93,9 @@ def dense_to_tilesparse(
 
 @custom_op("bitsparse_forward_methods::ffn_sparse_forward", mutates_args={"vals", "offset"})
 def ffn_sparse_forward_op(
-    x: torch.Tensor,
-    W1: torch.Tensor,
-    W2: torch.Tensor,
-    vals: torch.Tensor,
-    offset: torch.Tensor,
-    BLOCK_M: int,
-    BLOCK_N: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    x: Tensor, W1: Tensor, W2: Tensor, vals: Tensor,
+    offset: Tensor, BLOCK_M: int, BLOCK_N: int,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Run FFN forward and pack the ReLU activation into the sparse value buffer."""
     preact = x @ W1.T
     preact.relu_()
@@ -122,14 +108,9 @@ def ffn_sparse_forward_op(
 
 @ffn_sparse_forward_op.register_fake
 def _(
-    x: torch.Tensor,
-    W1: torch.Tensor,
-    W2: torch.Tensor,
-    vals: torch.Tensor,
-    offset: torch.Tensor,
-    BLOCK_M: int,
-    BLOCK_N: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    x: Tensor, W1: Tensor, W2: Tensor, vals: Tensor,
+    offset: Tensor, BLOCK_M: int,  BLOCK_N: int,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Return fake tensor outputs for tracing ffn_sparse_forward_op."""
     M = x.shape[0]
     N = W1.shape[0]
@@ -142,32 +123,32 @@ def _(
     )
 
 
-def _backward(ctx, grad_output: torch.Tensor):
-    """Dispatch the custom autograd backward through the configured sparse backward implementation."""
-    x, W1, W2 = ctx.saved_tensors
-    z_sparse = ctx.z_sparse
-    ctx.z_sparse = None
+# def _backward(ctx, grad_output: Tensor):
+#     """Dispatch the custom autograd backward through the configured sparse backward implementation."""
+#     x, W1, W2 = ctx.saved_tensors
+#     z_sparse = ctx.z_sparse
+#     ctx.z_sparse = None
+#
+#     grad_x, grad_W1, grad_W2 = BACKWARD_IMPL(grad_output, z_sparse, x, W1, W2)
+#     return grad_x, grad_W1, grad_W2, None
 
-    grad_x, grad_W1, grad_W2 = BACKWARD_IMPL(grad_output, z_sparse, x, W1, W2)
-    return grad_x, grad_W1, grad_W2, None
 
-
-class FFNSparseDirect(Function):
-    """Forward with direct Python/Triton dense_to_tilesparse visible to compile."""
+class FFNSparse(Function):
+    """Forward of FFN."""
 
     @staticmethod
     def forward(ctx, x, W1, W2, sparse_data):
+        ctx.save_for_backward(x, W1, W2)
         preact = x @ W1.T
-        preact = F.relu(preact)
+        preact.relu_()
         z_sparse = dense_to_tilesparse(preact, sparse_data)
         ctx.z_sparse = z_sparse
-        ctx.save_for_backward(x, W1, W2)
         return preact @ W2.T
 
-    backward = staticmethod(_backward)
+    backward = staticmethod(BACKWARD_IMPL)
 
 
-class FFNSparseCustomFFN(Function):
+class FFNSparseCustomOp(Function):
     """Forward with matmul, pack, and second matmul hidden behind one custom op."""
 
     @staticmethod
@@ -185,4 +166,4 @@ class FFNSparseCustomFFN(Function):
         ctx.save_for_backward(x, W1, W2)
         return output
 
-    backward = staticmethod(_backward)
+    backward = staticmethod(FFN_backward)
