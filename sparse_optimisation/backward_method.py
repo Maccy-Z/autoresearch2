@@ -121,7 +121,7 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
 
 def grad_z_sparse_inplace(
     grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
-    BLOCK_K: int = 32,
+    BLOCK_K: int = 64,
 ) -> BitsparseTensor:
     """ Combine grad_z = grad_output @ W2,
                 grad_z = grad_z * (z>0)
@@ -142,7 +142,7 @@ def grad_z_sparse_inplace(
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         BLOCK_K=BLOCK_K,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=3,
+        num_warps=16, num_stages=3,
     )
     return z_sparse
 
