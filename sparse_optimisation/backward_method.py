@@ -154,7 +154,7 @@ def FFN_backward(ctx, grad_output: Tensor):
     ctx.z_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W2 = AspB_block(grad_output.T, z_sparse)
+    grad_W2 = AspB(grad_output.T, z_sparse)
 
     grad_z = grad_output @ W2
     # grad_z <- grad_z * relu_grad
@@ -183,8 +183,7 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     ctx.z_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W2 = AspB_block(grad_output.T, z_sparse)
-    # Compute (grad_output @ W2)*relu_grad. Return sparse format
+    grad_W2 = AspB(grad_output.T, z_sparse)
     grad_z_sparse = grad_z_sparse_inplace(grad_output, W2, z_sparse)
     del z_sparse
     grad_W1 = AspB_block(x.T, grad_z_sparse).T
