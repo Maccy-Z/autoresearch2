@@ -1,8 +1,8 @@
 import torch
 from torch import Tensor
 
-from sparse_kernels import _unpack_batch_2tile_kernel, _mask_with_bitmask_kernel, \
-    _grad_z_sparse_values_kernel, _unpack_batch_kernel
+from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
+    _grad_z_sparse_values_kernel
 from sparse_utils import BitsparseTensor
 
 
@@ -65,10 +65,9 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     TILE_BYTES = TILE_NUMEL // 8
 
     num_tiles = grid_m * grid_n
-    num_blocks = (num_tiles + 1) // 2
     dense = torch.empty(M, N, device=A.device, dtype=vals.dtype)
 
-    _unpack_batch_2tile_kernel[(num_blocks,)](
+    _unpack_batch_kernel[(num_tiles,)](
         vals, bitmask, prefix,
         B_sparse.vals_offset,
         dense,
