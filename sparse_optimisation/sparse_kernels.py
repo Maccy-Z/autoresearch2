@@ -40,11 +40,8 @@ def _row_pack_count_kernel(
         shift_weights = tl.arange(0, 8)[None, :]
         bytes_val = tl.sum(bits_2d << shift_weights, 1).to(tl.uint8)
 
-        prev = tl.load(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
-                       mask=byte_idx < ROW_BYTES, other=0).to(tl.int32)
         tl.store(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
-                 (prev | bytes_val.to(tl.int32)).to(tl.uint8),
-                 mask=byte_idx < ROW_BYTES)
+                 bytes_val, mask=byte_idx < ROW_BYTES)
 
         nnz += tl.sum(bits)
 
