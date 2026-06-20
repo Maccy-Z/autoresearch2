@@ -121,7 +121,7 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
 
 def grad_z_sparse_inplace(
     grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
-    BLOCK_K: int = 128,
+    BLOCK_K: int = 256,
 ) -> BitsparseTensor:
     """ grad_z = (grad_output @ W2) ⊙ (z>0), written sparsely in-place. """
 
@@ -139,9 +139,7 @@ def grad_z_sparse_inplace(
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         BLOCK_K=BLOCK_K,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
-    )
-    return z_sparse
+        num_warps=16, num_stages=2,
 
 
 def _unpack_to_dense(t: BitsparseTensor) -> Tensor:
