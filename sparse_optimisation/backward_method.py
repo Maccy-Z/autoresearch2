@@ -74,7 +74,7 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
+        num_warps=16, num_stages=2,
     )
 
     return A @ dense
