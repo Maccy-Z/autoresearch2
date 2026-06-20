@@ -10,7 +10,7 @@ from sparse_utils import BitsparseTensor, ValueBuffer
 
 DEFAULT_BLOCK_M = 128
 DEFAULT_BLOCK_N = 128
-BACKWARD_IMPL = FFN_backward
+BACKWARD_IMPL = torch.compile(FFN_backward)
 
 
 def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
