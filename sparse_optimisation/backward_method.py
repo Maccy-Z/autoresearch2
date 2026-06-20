@@ -48,7 +48,6 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=20000) -> Tensor:
     return out
 
 
-@torch.compile
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     """
     y = A @ B_sparse.
