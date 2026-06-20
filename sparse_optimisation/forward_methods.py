@@ -77,6 +77,7 @@ def _dense_to_tilesparse_pack_impl(
     return tile_bitmasks, tile_prefix, total_offset
 
 
+@torch.compile
 def dense_to_tilesparse(
     dense: Tensor,
     sparse_data: ValueBuffer,
