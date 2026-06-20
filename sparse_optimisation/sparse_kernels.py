@@ -26,7 +26,7 @@ def _row_pack_count_kernel(
         return
 
     row_ptr = dense_ptr + pid * stride_n
-    nnz = tl.zeros((1,), dtype=tl.int32)
+    nnz = 0
 
     for col_block in range(0, N, BLOCK_COLS):
         cols = col_block + tl.arange(0, BLOCK_COLS)
