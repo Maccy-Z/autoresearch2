@@ -40,7 +40,7 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:
             first_m_tile, grid_n, N, batch_rows,
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
             TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-            num_warps=4, num_stages=2,
+            num_warps=8, num_stages=2,
         )
         A_batch = A[:, m_start:m_end]
         out.add_(A_batch @ dense_batch)
@@ -74,7 +74,7 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return A @ dense
@@ -113,7 +113,7 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
             first_m_tile, grid_n, N, batch_rows,
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
             TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-            num_warps=4, num_stages=2,
+            num_warps=8, num_stages=2,
         )
         torch.mm(dense_batch, B, out=out[m_start:m_end])
     return out
@@ -142,7 +142,7 @@ def grad_z_sparse_inplace(
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         BLOCK_K=BLOCK_K,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=3,
+        num_warps=8, num_stages=3,
     )
     return z_sparse
 
@@ -163,7 +163,7 @@ def FFN_backward(ctx, grad_output: Tensor):
         z_sparse.shape[0], z_sparse.shape[1],
         BLOCK_M=z_sparse.BLOCK_M, BLOCK_N=z_sparse.BLOCK_N,
         TILE_BYTES=z_sparse.BLOCK_M * z_sparse.BLOCK_N // 8,
-        num_warps=4, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     del z_sparse

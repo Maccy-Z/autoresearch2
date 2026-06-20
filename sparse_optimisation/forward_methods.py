@@ -55,7 +55,7 @@ def _dense_to_tilesparse_pack_impl(
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     total_offset = offset.clone()
@@ -70,7 +70,7 @@ def _dense_to_tilesparse_pack_impl(
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=4, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     offset.add_(tile_prefix[-1])
