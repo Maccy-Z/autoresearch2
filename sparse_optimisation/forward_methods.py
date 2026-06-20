@@ -3,7 +3,7 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import FFN_backward_sparse, FFN_backward
+from backward_method import FFN_backward
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor, ValueBuffer
 
@@ -77,7 +77,6 @@ def _dense_to_tilesparse_pack_impl(
     return tile_bitmasks, tile_prefix, total_offset
 
 
-@torch.compile
 def dense_to_tilesparse(
     dense: Tensor,
     sparse_data: ValueBuffer,
