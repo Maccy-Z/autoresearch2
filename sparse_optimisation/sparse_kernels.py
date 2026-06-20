@@ -31,19 +31,22 @@ def _row_pack_count_kernel(
     for col_block in range(0, N, BLOCK_COLS):
         cols = col_block + tl.arange(0, BLOCK_COLS)
         vals = tl.load(row_ptr + cols, mask=cols < N, other=0.0)
-        bits = (vals > 0.0)
+        bits = (vals > 0.0).to(tl.int32)
 
         byte_base = col_block // 8
-        for j in range(8):
-            bit_slice = bits[j::8].to(tl.int32) << j
-            byte_idx = byte_base + tl.arange(0, BLOCK_COLS // 8)
-            prev = tl.load(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
-                           mask=byte_idx < ROW_BYTES, other=0).to(tl.int32)
-            new_val = prev | bit_slice
-            tl.store(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
-                     new_val.to(tl.uint8), mask=byte_idx < ROW_BYTES)
+        byte_idx = byte_base + tl.arange(0, BLOCK_COLS // 8)
 
-        nnz += tl.sum(bits.to(tl.int32))
+        bits_2d = tl.reshape(bits, (BLOCK_COLS // 8, 8))
+        shift_weights = tl.arange(0, 8)[None, :]
+        bytes_val = tl.sum(bits_2d << shift_weights, 1).to(tl.uint8)
+
+        prev = tl.load(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
+                       mask=byte_idx < ROW_BYTES, other=0).to(tl.int32)
+        tl.store(row_bitmask_ptr + pid * ROW_BYTES + byte_idx,
+                 (prev | bytes_val.to(tl.int32)).to(tl.uint8),
+                 mask=byte_idx < ROW_BYTES)
+
+        nnz += tl.sum(bits)
 
     tl.store(row_counts_ptr + pid, nnz)
 
@@ -111,11 +114,9 @@ def _row_unpack_kernel(
                      mask=(byte_base + tl.arange(0, BLOCK_COLS // 8)) < ROW_BYTES,
                      other=0).to(tl.int32)
 
-        bits = tl.zeros((BLOCK_COLS,), dtype=tl.int32)
-        for j in range(8):
-            bits += ((bm >> j) & 1) << (tl.arange(0, BLOCK_COLS) % 8 == j)
-
-        bits = bits.to(tl.int32)
+        bm_2d = tl.reshape(bm, (BLOCK_COLS // 8, 1))
+        bit_pos = tl.arange(0, 8)[None, :]
+        bits = tl.reshape((bm_2d >> bit_pos) & 1, (BLOCK_COLS,)).to(tl.int32)
         nnz_chunk = tl.sum(bits)
         ranks = tl.cumsum(bits, 0) - 1
         vals8 = tl.load(vals_ptr + pos + ranks, mask=(bits == 1), other=0)
