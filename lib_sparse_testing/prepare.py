@@ -4,9 +4,58 @@ import time
 import math
 import gc
 import torch._logging
+from torch.autograd import Function
 
 from forward_methods import FFNSparse, FFNSparseCustomOp, ValueBuffer
-from lib_sparse.prepare_layer import FFNv1, FFNv2, FFNv3
+
+
+class FFNv3(Function):
+    """ Recompute relu gradient """
+    @staticmethod
+    def forward(ctx, x, W1, W2, e1=None):
+        """
+        out = relu(x @ W1.T) @ W2.T
+
+        x.shape = [BS, dim]
+        W1.shape = [exp_fact*in_dim, in_dim]
+        W2.shape = [dim, exp_fact*in_dim]
+
+        returns:
+            output: (BS, dim)
+        """
+        z = x @ W1.T           # shape = [BS, exp_fact*in_dim]
+        z.relu_()
+        output = z @ W2.T           # shape = [BS, dim]
+        ctx.save_for_backward(x, W1, W2, z)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, W1, W2, z = ctx.saved_tensors
+        needs_x = ctx.needs_input_grad[0]
+
+        # output = z @ W2.T
+        # grad_output.shape = [BS, dim]
+
+        grad_z = grad_output @ W2          # [BS, exp_fact*in_dim]
+        grad_W2 = grad_output.T @ z        # [dim, exp_fact*in_dim]
+
+        # z = relu(preact)
+        grad_preact = torch.ops.aten.threshold_backward.grad_input(
+        grad_z, z, 0, grad_input=grad_z
+        )
+        if not torch.compiler.is_compiling():
+            ctx.maybe_clear_saved_tensors()
+        del z
+
+        # preact = x @ W1.T
+        grad_x = None
+        if needs_x:
+            grad_x = grad_preact @ W1          # [BS, dim]
+
+        grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
+
+        return grad_x, grad_W1, grad_W2, None, None
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
@@ -56,7 +105,7 @@ class DeepFFN(nn.Module):
             x = x + FFNv3.apply(x_inner, W1, W2)
         return x
 
-    # @torch.compile
+    #@torch.compile
     def forward(self, x, buffer: ValueBuffer):
         """Run the residual FFN stack while allocating sparse storage for this pass."""
         buffer.ready_buffer()
@@ -107,7 +156,7 @@ def evaluate():
     # Setup parameters
     hdim = 4096
     bs = 10_000
-    layers = 16
+    layers = 12
     dtype = torch.bfloat16
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
@@ -144,7 +193,6 @@ def run_base():
     """Configure deterministic/debug settings and launch the benchmark."""
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    # torch._functorch.config.activation_memory_budget = 0.8
     torch._logging.set_logs(
         graph_breaks=True,
     )

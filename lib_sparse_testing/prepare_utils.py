@@ -1,3 +1,5 @@
+import torch
+from cprint import c_print
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch import Tensor
@@ -42,3 +44,23 @@ class BitsparseTensor:
     def sparsity_ratio(self):
         return self.vals.numel() / (self.shape[0] * self.shape[1])
 
+
+class ValueBuffer:
+    vals: Tensor = None
+    offset: Tensor = None
+
+    def __init__(self, size, device, dtype):
+        self.size = size
+        self.device = device
+        self.dtype = dtype
+
+    def init_buffer(self):
+        if self.vals is None:
+            self.vals = torch.empty(self.size, device=self.device, dtype=self.dtype)
+
+            c_print(f'Global buffer: {self.vals.nbytes / (1024 ** 2)}MB', color='green')
+            c_print(f'Maximum number of elements: {self.vals.numel()}', color='green')
+
+    def ready_buffer(self):
+        """ Set offset tensor inside main training loop, since this needs to be consistent. """
+        self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)

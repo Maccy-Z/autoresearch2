@@ -93,3 +93,47 @@ def _mask_with_bitmask_kernel(
     masked = tl.where(bits != 0, gz, 0.0)
     tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
+
+@triton.jit
+def _grad_z_sparse_values_kernel(
+    grad_output_ptr, W2_ptr, bitmask_ptr,
+    prefix_ptr, vals_offset_ptr, vals_out_ptr,
+    M, N, grid_n,
+    D: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+):
+    """Compute sparse grad_z values for active bitmask entries and write them into vals_out."""
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    tile_id = pid_m * grid_n + pid_n
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k_start in range(0, D, BLOCK_K):
+        k = k_start + offs_k
+        go = tl.load(
+            grad_output_ptr + offs_m[:, None] * D + k[None, :],
+            mask=(offs_m[:, None] < M) & (k[None, :] < D),
+            other=0.0,
+        )
+        w2 = tl.load(
+            W2_ptr + k[:, None] * N + offs_n[None, :],
+            mask=(k[:, None] < D) & (offs_n[None, :] < N),
+            other=0.0,
+        )
+        acc += tl.dot(go, w2)
+
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    bit_pos = tl.arange(0, 8)[None, :]
+    mask_bits = tl.reshape((bytes_2d >> bit_pos) & 1, (TILE_NUMEL,))
+
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    vals = tl.reshape(acc, (TILE_NUMEL,))
+    base = tl.load(vals_offset_ptr) + tl.load(prefix_ptr + tile_id)
+    tl.store(vals_out_ptr + base + ranks, vals, mask=(mask_bits == 1))

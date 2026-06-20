@@ -2,38 +2,15 @@ import torch
 from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
-from cprint import c_print
 
 from backward_method import FFN_backward_sparse, FFN_backward
 from sparse_pack import _compact_vals_kernel, _tile_pack_kernel
-from prepare_utils import BitsparseTensor
+from prepare_utils import BitsparseTensor, ValueBuffer
 
 
 DEFAULT_BLOCK_M = 128
 DEFAULT_BLOCK_N = 128
 BACKWARD_IMPL = FFN_backward
-
-
-class ValueBuffer:
-    vals: Tensor = None
-    offset: Tensor = None
-
-    def __init__(self, size, device, dtype):
-        self.size = size
-        self.device = device
-        self.dtype = dtype
-
-    def init_buffer(self):
-        if self.vals is None:
-            self.vals = torch.empty(self.size, device=self.device, dtype=self.dtype)
-
-            c_print(f'Global buffer: {self.vals.nbytes / (1024 ** 2)}MB', color='green')
-            c_print(f'Maximum number of elements: {self.vals.numel()}', color='green')
-
-    def ready_buffer(self):
-        """ Set offset tensor inside main training loop, since this needs to be consistent. """
-        self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
-
 
 
 def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
@@ -165,8 +142,8 @@ class FFNSparseCustomOp(Function):
     """Forward with matmul, pack, and second matmul hidden behind one custom op."""
 
     @staticmethod
-    def forward(ctx, x, W1, W2, sparse_data):
-        vals, offset = sparse_data
+    def forward(ctx, x, W1, W2, sparse_data: ValueBuffer):
+        vals, offset = sparse_data.vals, sparse_data.offset
         output, bitmask, prefix, vals_offset = ffn_sparse_forward_op(
             x, W1, W2, vals, offset, DEFAULT_BLOCK_M, DEFAULT_BLOCK_N
         )
