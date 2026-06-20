@@ -20,11 +20,10 @@ class BitsparseTensor:
                  vals_offset: Tensor,
                  grid_m: int, grid_n: int, BLOCK_M: int, BLOCK_N: int,
                  shape):
-        super().__init__()
         self.vals = vals
         self.bitmask = bitmask
         self.prefix = prefix
-        self.vals_offset = vals_offset + 1 - 1
+        self.vals_offset = vals_offset
         self.grid_m = grid_m
         self.grid_n = grid_n
         self.BLOCK_M = BLOCK_M
