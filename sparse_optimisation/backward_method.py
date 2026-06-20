@@ -57,15 +57,18 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
 
     TILE_NUMEL = BLOCK_M * BLOCK_N
     num_tiles = grid_m * grid_n
+    TILES_PER_BLOCK = 4
+    num_blocks = (num_tiles + TILES_PER_BLOCK - 1) // TILES_PER_BLOCK
     dense = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
 
-    _unpack_batch_int8_kernel[(num_tiles,)](
+    _unpack_batch_int8_kernel[(num_blocks,)](
         vals, scales,
         dense,
         0, grid_n, N, M,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=16, num_stages=2,
+        TILES_PER_BLOCK=TILES_PER_BLOCK,
+        num_warps=8, num_stages=2,
     )
 
     return A @ dense

@@ -189,23 +189,26 @@ def _unpack_batch_int8_kernel(
     first_m_tile, grid_n_sparse, K, batch_rows,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr,
+    TILES_PER_BLOCK: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    row_tile_in_batch = pid // grid_n_sparse
-    k_tile = pid % grid_n_sparse
-    orig_row_tile = first_m_tile + row_tile_in_batch
-    tile_id = orig_row_tile * grid_n_sparse + k_tile
+    base_tile = pid * TILES_PER_BLOCK
 
-    scale = tl.load(scales_ptr + tile_id)
-    vals8 = tl.load(vals_ptr + tile_id * TILE_NUMEL + tl.arange(0, TILE_NUMEL))
-    v_flat = vals8.to(tl.float32) * scale
-    v_2d = tl.reshape(v_flat, (BLOCK_M, BLOCK_N))
+    for t in range(TILES_PER_BLOCK):
+        tile_id = base_tile + t
+        row_tile = tile_id // grid_n_sparse
+        k_tile = tile_id % grid_n_sparse
 
-    row_base = row_tile_in_batch * BLOCK_M
-    offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
-    offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
-    offs = offs_m * K + offs_k
-    tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
+        scale = tl.load(scales_ptr + tile_id)
+        vals8 = tl.load(vals_ptr + tile_id * TILE_NUMEL + tl.arange(0, TILE_NUMEL))
+        v_flat = vals8.to(tl.float32) * scale
+        v_2d = tl.reshape(v_flat, (BLOCK_M, BLOCK_N))
+
+        row_base = (row_tile - first_m_tile) * BLOCK_M
+        offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
+        offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+        offs = offs_m * K + offs_k
+        tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
 
 
 @triton.jit
