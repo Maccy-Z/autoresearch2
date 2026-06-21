@@ -38,7 +38,6 @@ def _make_bitsparse(
     )
 
 
-@torch.compile
 def _dense_to_tilesparse_pack_impl(
     dense: Tensor, vals: Tensor, offset: Tensor,
     BLOCK_M: int = DEFAULT_BLOCK_M,
@@ -97,13 +96,16 @@ def ffn_sparse_forward_op(
     x: Tensor, W1: Tensor, W2: Tensor, vals: Tensor,
     offset: Tensor, BLOCK_M: int, BLOCK_N: int,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Run FFN forward and pack the ReLU activation into the sparse value buffer."""
     preact = x @ W1.T
     preact.relu_()
-    bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
-        preact, vals, offset, BLOCK_M, BLOCK_N
-    )
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
+            preact, vals, offset, BLOCK_M, BLOCK_N
+        )
     output = preact @ W2.T
+    torch.cuda.current_stream().wait_stream(stream)
     return output, bitmask, prefix, vals_offset
 
 
