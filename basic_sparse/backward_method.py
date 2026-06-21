@@ -6,6 +6,11 @@ from sparse_utils import BitsparseTensor
 
 
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
+    """Compute ``A @ B`` where ``B`` is stored as ``BitsparseTensor``.
+
+    Shapes: ``A[P, M]`` and sparse ``B[M, N]`` produce ``out[P, N]``.
+    The current implementation unpacks ``B`` to dense before matmul.
+    """
     vals = B_sparse.vals
     bitmask = B_sparse.bitmask
     prefix = B_sparse.prefix
@@ -30,6 +35,13 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
 
 
 def FFN_backward(ctx, grad_output: Tensor):
+    """Backward for ``y = relu(x @ W1.T) @ W2.T`` using sparse saved ``z``.
+
+    Shapes: ``grad_output[B, D]``, ``x[B, D]``, ``W1[H, D]``, ``W2[D, H]``.
+    Gradients are ``dW2 = grad_output.T @ z``, ``dz = grad_output @ W2``,
+    ``dpreact = dz * (z > 0)``, ``dx = dpreact @ W1``, and
+    ``dW1 = dpreact.T @ x``.
+    """
     x, W1, W2 = ctx.saved_tensors
     z = ctx.z_sparse
     ctx.z_sparse = None

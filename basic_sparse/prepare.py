@@ -10,8 +10,14 @@ from forward_methods import FFNSparse
 
 
 class FFNv3(Function):
+    """Dense baseline autograd FFN for comparison.
+
+    For ``x[B, D]``, ``W1[H, D]``, and ``W2[D, H]`` computes
+    ``z = relu(x @ W1.T)`` and ``output = z @ W2.T``.
+    """
     @staticmethod
     def forward(ctx, x, W1, W2, e1=None):
+        """Run the dense FFN forward pass and save tensors for backward."""
         z = x @ W1.T
         z.relu_()
         output = z @ W2.T
@@ -20,6 +26,7 @@ class FFNv3(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """Compute dense FFN gradients from ``grad_output[B, D]``."""
         x, W1, W2, z = ctx.saved_tensors
         needs_x = ctx.needs_input_grad[0]
 
@@ -42,6 +49,7 @@ class FFNv3(Function):
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
+    """Create FFN weights ``W1[H, dim]`` and ``W2[dim, H]`` with ``H=floor(dim*expansion)``."""
     hdim = math.floor(dim * expansion)
     W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
     torch.nn.init.xavier_uniform_(W1, generator=G)
@@ -54,6 +62,7 @@ def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
 
 
 class DeepFFN(nn.Module):
+    """Stack of residual FFN layers ``x <- x + FFN(x)`` for benchmarking."""
     def __init__(self, dtype, layers=12, hidm=4096):
         super().__init__()
         G = torch.Generator(device="cuda").manual_seed(0)
@@ -66,19 +75,23 @@ class DeepFFN(nn.Module):
 
     @staticmethod
     def hook(w):
+        """Drop accumulated parameter gradients to reduce benchmark memory noise."""
         w.grad = None
 
     def setup_hooks(self):
+        """Register post-accumulation hooks on every parameter."""
         for n, p in self.named_parameters():
             p.register_post_accumulate_grad_hook(self.hook)
 
     def forward_base(self, x):
+        """Run the dense baseline on ``x[B, D]`` through all residual layers."""
         for W1, W2 in zip(self.W1s, self.W2s):
             x_inner = x
             x = x + FFNv3.apply(x_inner, W1, W2)
         return x
 
     def forward(self, x):
+        """Run the sparse-activation FFN on ``x[B, D]`` through all residual layers."""
         for W1, W2 in zip(self.W1s, self.W2s):
             x_inner = x
             x = x + FFNSparse.apply(x_inner, W1, W2)
@@ -86,6 +99,7 @@ class DeepFFN(nn.Module):
 
 
 def run_step(x, model, sparse=False, steps=1):
+    """Benchmark ``steps`` train iterations and return tracking stats, VRAM, and time."""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
@@ -115,6 +129,7 @@ def run_step(x, model, sparse=False, steps=1):
 
 
 def evaluate():
+    """Compare dense and sparse FFN training for correctness, memory, and speed."""
     hdim = 4096
     bs = 10000
     layers = 12
@@ -144,6 +159,7 @@ def evaluate():
 
 
 def run_base():
+    """Configure PyTorch matmul/logging settings and run the benchmark."""
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
     torch._logging.set_logs(graph_breaks=True)

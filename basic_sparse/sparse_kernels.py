@@ -21,6 +21,7 @@ def _tile_pack_kernel(
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
 ):
+    """Pack each ``BLOCK_M x BLOCK_N`` dense tile into bitmasks and nnz counts."""
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     pid = pid_m * tl.num_programs(1) + pid_n
@@ -52,6 +53,7 @@ def _compact_vals_kernel(
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr,
 ):
+    """Write positive dense values into ``vals_out`` using per-tile prefix offsets."""
     pid = tl.program_id(0)
     base = tl.load(tile_prefix_ptr + pid)
 
@@ -77,6 +79,7 @@ def _unpack_batch_kernel(
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
 ):
+    """Unpack sparse tiles back into a dense ``batch_rows x K`` matrix slice."""
     pid = tl.program_id(0)
     row_tile_in_batch = pid // grid_n_sparse
     k_tile = pid % grid_n_sparse
@@ -109,6 +112,7 @@ def _mask_with_bitmask_kernel(
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
     TILE_BYTES: tl.constexpr,
 ):
+    """Apply the saved ReLU mask in-place: ``grad = grad * bitmask``."""
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     grid_n = tl.num_programs(1)

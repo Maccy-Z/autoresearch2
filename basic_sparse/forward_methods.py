@@ -12,6 +12,7 @@ BLOCK_N = 128
 
 
 def _tile_grid(M: int, N: int) -> tuple[int, int, int, int, int]:
+    """Return tile grid metadata for a dense ``M x N`` matrix."""
     TILE_NUMEL = BLOCK_M * BLOCK_N
     TILE_BYTES = TILE_NUMEL // 8
     grid_m = (M + BLOCK_M - 1) // BLOCK_M
@@ -21,6 +22,11 @@ def _tile_grid(M: int, N: int) -> tuple[int, int, int, int, int]:
 
 
 def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
+    """Compress positive entries of ``dense[M, N]`` into tile bitmasks and values.
+
+    This stores the ReLU activation sparsely: ``mask = dense > 0`` and
+    ``vals = dense[mask]`` in row-major tile order.
+    """
     M, N = dense.shape
     grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N)
 
@@ -55,8 +61,14 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
 
 
 class FFNSparse(Function):
+    """Autograd FFN using sparse storage for the hidden ReLU activation.
+
+    Forward formula for ``x[B, D]``, ``W1[H, D]``, ``W2[D, H]``:
+    ``z = relu(x @ W1.T)`` and ``y = z @ W2.T``.
+    """
     @staticmethod
     def forward(ctx, x, W1, W2):
+        """Compute FFN output and save ``z`` as a ``BitsparseTensor`` for backward."""
         ctx.save_for_backward(x, W1, W2)
         preact = x @ W1.T
         preact.relu_()

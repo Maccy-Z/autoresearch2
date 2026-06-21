@@ -3,7 +3,12 @@ from torch import Tensor
 
 
 class BitsparseTensor:
-    """Bitmask sparse tensor — per-layer allocation, no global buffer."""
+    """Tile-wise bitmask sparse tensor for a dense matrix of shape ``shape``.
+
+    ``vals`` stores positive entries in row-major tile order, ``bitmask`` marks
+    nonzero locations with one bit per element, and ``prefix[t]`` gives the
+    starting offset of tile ``t`` in ``vals``.
+    """
     vals: Tensor
     bitmask: Tensor
     prefix: Tensor
@@ -14,6 +19,7 @@ class BitsparseTensor:
 
     def __init__(self, vals, bitmask, prefix,
                  grid_m, grid_n, BLOCK_M, BLOCK_N, shape):
+        """Store compressed values and tile metadata for later unpack/masking."""
         self.vals = vals
         self.bitmask = bitmask
         self.prefix = prefix
