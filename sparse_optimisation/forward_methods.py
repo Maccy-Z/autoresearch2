@@ -38,6 +38,7 @@ def _make_bitsparse(
     )
 
 
+@torch.compile
 def _dense_to_tilesparse_pack_impl(
     dense: Tensor, vals: Tensor, offset: Tensor,
     BLOCK_M: int = DEFAULT_BLOCK_M,
