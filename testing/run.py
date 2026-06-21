@@ -1,156 +1,160 @@
-# import os
-# # PYTORCH_NO_CUDA_MEMORY_CACHING=1
-# os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
-# #TORCH_SHOW_CPP_STACKTRACES=1
-# os.environ["TORCH_SHOW_CPP_STACKTRACES"] = "1"
-# # CUDA_LAUNCH_BLOCKING=1;PYTORCH_NO_CUDA_MEMORY_CACHING=1
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import time
 import math
-import gc
-import torch._logging
-import logging
-from cprint import c_print
-
-from lib_sparse.prepare_layer import FFNv3, FFNv1
-from test_sparse import FFNSparse#, reset_sparse_globals, init_sparse_buffer, get_globals
+import time
+from torch.autograd import Function
 
 
-# ------------------- Global value buffer ------------------------------------
-_global_vals: torch.Tensor = None
-_global_offset: torch.Tensor = None
-
-def init_sparse_buffer(size: int, device, dtype):
-    global _global_vals, _global_offset, _global_counter
-    _global_vals = torch.empty(size, device=device, dtype=dtype)
-    _global_offset = torch.zeros(1, device=device, dtype=torch.int32)
-
-    c_print(f'Global buffer: {_global_vals.nbytes/(1024**2)}MB', color='green')
-    c_print(f'Maximum number of elements: {_global_vals.numel()}', color='green')
-
-@torch.compiler.disable()
-def reset_sparse_globals():
-    global _global_offset
-    if _global_offset is not None:
-        _global_offset.zero_()
-
-
-def get_globals():
-    return [_global_vals, _global_offset]
-
-
-def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
+def generate_parameters_3(dim, G, dtype, expansion=5.25, device="cuda"):
+    """Create 3-layer FFN weights ``W1[H, D]``, ``W2[H, H]``, ``W3[D, H]``."""
     hdim = math.floor(dim * expansion)
-    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
+    W1 = torch.empty(hdim, dim, device=device, requires_grad=True, dtype=dtype)
+    W2 = torch.empty(hdim, hdim, device=device, requires_grad=True, dtype=dtype)
+    W3 = torch.empty(dim, hdim, device=device, requires_grad=True, dtype=dtype)
     torch.nn.init.xavier_uniform_(W1, generator=G)
-
-    W2 = torch.empty(dim, hdim, device=device, dtype=dtype)
     torch.nn.init.xavier_uniform_(W2, generator=G)
-
+    torch.nn.init.xavier_uniform_(W3, generator=G)
     shift = torch.randn(1, generator=G, device=device, dtype=dtype)
-    W1 = W1 + 0.01*shift*W1.std()
-    W2 = W2 - 0.01*shift*W2.std()
-    return W1, W2
+    W1 = (W1 + 0.01 * shift * W1.std()).detach().requires_grad_(True)
+    W2 = (W2 + 0.01 * shift * W2.std()).detach().requires_grad_(True)
+    W3 = (W3 - 0.01 * shift * W3.std()).detach().requires_grad_(True)
+    return W1, W2, W3
 
 
-class DeepFFN(nn.Module):
-    def __init__(self, dtype, layers=12, hidm=4096):
-        super().__init__()
-        G = torch.Generator(device="cuda").manual_seed(0)
-        self.W1s, self.W2s = nn.ParameterList(), nn.ParameterList()
-        for i in range(layers):
-            W1, W2 = generate_parameters(hidm, G, dtype=dtype)
-
-            self.W1s.append(nn.Parameter(W1))
-            self.W2s.append(nn.Parameter(W2))
-
-    # @torch.no_grad()
-    def forward(self, x, sparse_data, buffer_size):
-        """ x.shape = [BS, dim] """
-        # sparse_data[1] = torch.zeros(1, device="cuda", dtype=torch.int32)
-        for W1, W2 in zip(self.W1s, self.W2s):
-            x_inner = F.rms_norm(x, x.shape[-1:])
-            x = x + FFNSparse.apply(x_inner, W1, W2, sparse_data)
-        return x
+def ffn_relu3(x, W1, W2, W3):
+    """Plain 3-layer FFN: ``relu(relu(x @ W1.T) @ W2.T) @ W3.T``."""
+    z1 = x @ W1.T
+    z1.relu_()
+    z2 = z1 @ W2.T
+    z2.relu_()
+    return z2 @ W3.T
 
 
-def run_step(x, model, buffer_size, steps=1):
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats("cuda")
-    torch.cuda.synchronize()
-    sparse_data = get_globals()
-    start = time.perf_counter()
+class FFN_manual(Function):
+    """Dense 3-layer FFN — normal backward (saved intermediates, no checkpointing)."""
+    @staticmethod
+    def forward(ctx, x, W1, W2, W3):
+        z1 = x @ W1.T          # pre-activation 1  [B, H]
+        z1.relu_()              # in-place ReLU → z1 is now post-activation
+        z2 = z1 @ W2.T          # pre-activation 2  [B, H]
+        z2.relu_()              # in-place ReLU → z2 is now post-activation
+        output = z2 @ W3.T      # output           [B, D]
+        ctx.save_for_backward(x, z1, z2, W1, W2, W3)
+        return output
 
-    for _ in range(steps):
-        torch.cuda.reset_peak_memory_stats("cuda")
-        model.zero_grad()
-        reset_sparse_globals()
-        y = model.forward(x, sparse_data, buffer_size)
-        loss = (y - x).pow(2).mean()
-        loss.backward()
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, a1, a2, W1, W2, W3 = ctx.saved_tensors
+        needs_x = ctx.needs_input_grad[0]
+        torch.cuda.empty_cache()
+        # a1, a2 are already post-activation (relu_ was in-place)
 
-        # VRAM usage
-        allocated = torch.cuda.max_memory_allocated("cuda") / 1024**2
-        global_vals, global_offset = get_globals()
-        print(f'{global_offset = }')
-        torch.cuda.synchronize()
+        # layer 3: linear
+        grad_a2 = grad_output @ W3          # [B, H]
+        grad_W3 = grad_output.T @ a2        # [D, H]
+        # relu2 backward — fused CUDA kernel, faster than torch.where
+        grad_z2 = torch.ops.aten.threshold_backward.grad_input(
+            grad_a2, a2, 0, grad_input=grad_a2
+        )
 
-    torch.cuda.synchronize()
-    end = time.perf_counter()
-    avg_time = (end - start) * 1000 / steps
+        # layer 2: linear
+        grad_a1 = grad_z2 @ W2              # [B, H]
+        grad_W2 = grad_z2.T @ a1            # [H, H]
+        del grad_z2, grad_a2
 
-    grad_stds = torch.ones(1)
-    return loss.cpu().detach(), grad_stds.cpu().detach(), allocated, avg_time
+        # relu1 backward
+        grad_z1 = torch.ops.aten.threshold_backward.grad_input(
+            grad_a1, a1, 0, grad_input=grad_a1
+        )
+        del grad_a1, a1, a2
+        ctx.maybe_clear_saved_tensors()
 
-
-def evaluate():
-    # Setup parameters
-    hdim = 4096
-    bs = 10_000
-    layers = 4
-    dtype = torch.bfloat16
-
-    G = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G)
-    # Our model
-    model = DeepFFN(layers=layers, dtype=dtype)
-    # model = torch.compile(model)
-    # torch._functorch.config.activation_memory_budget = 1.
-
-    # Setup sparse buffer
-    hdim_expanded = math.floor(hdim * 5.25)
-    buffer_size = int(bs * hdim_expanded * layers * 0.55)
-    init_sparse_buffer(
-        buffer_size, device="cuda", dtype=dtype,
-    )
-    run_step(x, model, buffer_size, steps=1)
-    # Main run
-    loss, grad_stds, vram, avg_time = run_step(x, model, buffer_size, steps=3)
-
-    print(f"VRAM allocated by tensors: {vram:.2f} MB")
-    print(f'{avg_time = :.2f} ms')
+        # layer 1: linear
+        grad_x = grad_z1 @ W1 if needs_x else None
+        grad_W1 = grad_z1.T @ x             # [H, D]
+        return grad_x, grad_W1, grad_W2, grad_W3
 
 
+def profile_both(dim=4096, batch=256, dtype=torch.bfloat16, device="cuda",
+                 warmup_iters=3, bench_iters=10):
+    """Profile ``FFN_manual`` and ``ffn_relu3`` for time and peak VRAM.
 
-def run_base():
+    Returns
+    -------
+    dict
+        Keys: ``"manual"``, ``"plain"`` — each maps to a dict with
+        ``"forward_time_ms"``, ``"backward_time_ms"``, ``"peak_vram_gb"``.
+    """
+    G = torch.Generator(device=device).manual_seed(42)
+    W1, W2, W3 = generate_parameters_3(dim, G, dtype, device=device)
+    print(f'{W1.shape = }, {W2.shape = }, {W3.shape = }')
+
+    def zero_grads():
+        W1.grad = None
+        W2.grad = None
+        W3.grad = None
+        x.grad = None
+
+    def warmup(fn, *args):
+        for _ in range(warmup_iters):
+            zero_grads()
+            out = fn(*args)
+            loss = out.sum()
+            loss.backward()
+            del out, loss
+
+    results = {}
+    for label, fn in [("manual", FFN_manual.apply), ("plain", ffn_relu3)]:
+        # ---- warmup ----
+        x = torch.randn(batch, dim, device=device, dtype=dtype, requires_grad=True)
+        torch.cuda.reset_peak_memory_stats(device)   # reset BEFORE warmup so peak includes it
+        warmup(fn, x, W1, W2, W3)
+
+        # ---- benchmark ----
+        x = torch.randn(batch, dim, device=device, dtype=dtype, requires_grad=True)
+
+        # time forward only (averaged) — no autograd needed
+        torch.cuda.synchronize(device)
+        fwd_start = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(bench_iters):
+                out = fn(x, W1, W2, W3)
+        torch.cuda.synchronize(device)
+        fwd_ms = (time.perf_counter() - fwd_start) * 1000 / bench_iters
+
+        # time forward+backward together (averaged), subtract fwd to get bwd
+        torch.cuda.synchronize(device)
+        total_start = time.perf_counter()
+        for _ in range(bench_iters):
+            zero_grads()
+            out = fn(x, W1, W2, W3)
+            loss = out.sum()
+            loss.backward()
+            del out, loss
+        torch.cuda.synchronize(device)
+        total_ms = (time.perf_counter() - total_start) * 1000 / bench_iters
+        bwd_ms = total_ms - fwd_ms
+
+        peak = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+
+        results[label] = {
+            "forward_time_ms": fwd_ms,
+            "backward_time_ms": bwd_ms,
+            "peak_vram_mb": peak,
+        }
+    return results
+
+
+def run_model():
+    """Run the profiling comparison and print results."""
     torch.set_float32_matmul_precision("high")
-    torch.manual_seed(0)
-    torch._logging.set_logs(
-        # dynamo=logging.INFO,
-        # dynamic=logging.INFO,
-        graph_breaks=True,
-        # recompiles=True,
-    )
-
-
-    evaluate()
+    results = profile_both()
+    for label, r in results.items():
+        print(f"--- {label} ---")
+        print(f"  forward  : {r['forward_time_ms']:.3f} ms")
+        print(f"  backward : {r['backward_time_ms']:.3f} ms")
+        print(f"  peak VRAM: {r['peak_vram_mb']:.3f} MB")
+        print()
 
 
 if __name__ == "__main__":
-    run_base()
+    run_model()
