@@ -32,7 +32,7 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=8, num_stages=2,
+        num_warps=4, num_stages=2,
     )
 
     tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
@@ -47,7 +47,7 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=16, num_stages=2,
+        num_warps=8, num_stages=2,
     )
 
     return BitsparseTensor(vals, tile_bitmasks, tile_prefix,
