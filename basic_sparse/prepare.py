@@ -78,7 +78,6 @@ class DeepFFN(nn.Module):
             x = x + FFNv3.apply(x_inner, W1, W2)
         return x
 
-    @torch.compile
     def forward(self, x):
         for W1, W2 in zip(self.W1s, self.W2s):
             x_inner = x
