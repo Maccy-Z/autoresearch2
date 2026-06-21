@@ -188,7 +188,7 @@ def evaluate():
         torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
 
     # Make sure vram usage is low enough
-    assert vram < vram_dn * 0.88
+    assert vram < vram_dn * 0.82
 
 
 def run_base():
