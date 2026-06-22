@@ -91,12 +91,6 @@ def FFN_backward(ctx, grad_output: Tensor):
     grad_W1 = grad_z.T @ x
     return grad_x, grad_W1, grad_W2, None
 
-def print_memory(msg):
-    memory = torch.cuda.memory_allocated("cuda")/1024**2
-    print(f'{msg}: {memory:.2f} MB')
-
-def print_nbytes(t):
-    print(f'{t.nbytes/1024**2:.1f}MB')
 
 def FFN3_backward(ctx, grad_output: Tensor):
     """Backward for ``y = relu(relu(x @ W1.T) @ W2.T) @ W3.T`` using sparse caches."""
@@ -106,7 +100,6 @@ def FFN3_backward(ctx, grad_output: Tensor):
     ctx.z1_sparse = None
     ctx.z2_sparse = None
     needs_x = ctx.needs_input_grad[0]
-    print_memory("Start allocated")
 
     grad_W3 = AspB(grad_output.T, z2)
 
@@ -142,8 +135,6 @@ def FFN3_backward(ctx, grad_output: Tensor):
         grad_x = None
     grad_W1 = grad_z1.T @ x
     del grad_z1
-
-    print_memory("Alloc at end of block")
 
 
     return grad_x, grad_W1, grad_W2, grad_W3

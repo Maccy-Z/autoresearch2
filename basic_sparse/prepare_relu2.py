@@ -11,7 +11,7 @@ from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3, RELU2_SCALE
 
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 3
+FFN_BLOCK_LAYERS = 2
 LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096

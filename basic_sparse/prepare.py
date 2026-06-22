@@ -10,7 +10,7 @@ from forward_methods import FFNSparse, FFNSparse3
 
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 3
+FFN_BLOCK_LAYERS = 2
 LAYERS = 4
 BATCH_SIZE = 10000
 DIM = 4096
