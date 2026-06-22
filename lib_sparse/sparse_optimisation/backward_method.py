@@ -6,7 +6,7 @@ from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
 from sparse_utils import BitsparseTensorBuffer
 
 
-def AspB_block(A: Tensor, B_sparse: BitsparseTensorBuffer, row_batch=20000) -> Tensor:
+def AspB_block(A: Tensor, B_sparse: BitsparseTensorBuffer, row_batch=2048) -> Tensor:
     """ y = A @ B_sparse. Done blockwise to reduce peak vram usage.
         A.shape = [K, M]
         B.shape = [M, N]
@@ -44,6 +44,48 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensorBuffer, row_batch=20000) -> T
         )
         A_batch = A[:, m_start:m_end]
         out.add_(A_batch @ dense_batch)
+
+    return out
+
+
+def ATspB_block(A: Tensor, B_sparse: BitsparseTensorBuffer, row_batch=2048) -> Tensor:
+    """ y = A.T @ B_sparse. Done blockwise to reduce peak vram usage.
+        A.shape = [K, M]
+        B.shape = [M, N]
+    """
+    vals = B_sparse.vals
+    bitmask = B_sparse.bitmask
+    prefix = B_sparse.prefix
+    BLOCK_M, BLOCK_N = B_sparse.BLOCK_M, B_sparse.BLOCK_N
+    grid_n = B_sparse.grid_n
+    M, N = B_sparse.shape
+    K = A.shape[1]
+
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
+
+    out = torch.zeros(K, N, device=A.device, dtype=A.dtype)
+
+    row_tiles_per_batch = max(1, row_batch // BLOCK_M)
+    for first_m_tile in range(0, B_sparse.grid_m, row_tiles_per_batch):
+        m_start = first_m_tile * BLOCK_M
+        m_end = min(m_start + row_tiles_per_batch * BLOCK_M, M)
+        batch_rows = m_end - m_start
+        num_row_tiles = (batch_rows + BLOCK_M - 1) // BLOCK_M
+        num_tiles_in_batch = num_row_tiles * grid_n
+
+        dense_batch = torch.empty(batch_rows, N, device=A.device, dtype=vals.dtype)
+        _unpack_batch_kernel[(num_tiles_in_batch,)](
+            vals, bitmask, prefix,
+            B_sparse.vals_offset,
+            dense_batch,
+            first_m_tile, grid_n, N, batch_rows,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+            TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+            num_warps=8, num_stages=2,
+        )
+        A_batch = A[m_start:m_end, :].T
+        out.addmm_(A_batch, dense_batch)
 
     return out
 
@@ -186,7 +228,7 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     grad_W2 = AspB(grad_output.T, z_sparse)
     grad_z_sparse = grad_z_sparse_inplace(grad_output, W2, z_sparse)
     del z_sparse
-    grad_W1 = AspB_block(x.T, grad_z_sparse).T
+    grad_W1 = ATspB_block(x, grad_z_sparse).T
 
     if needs_x:
         grad_x = spAB(grad_z_sparse, W1)
@@ -204,10 +246,9 @@ def FFN3_backward(ctx, grad_output: Tensor):
     ctx.z2_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-
-    grad_z2 = grad_output @ W3
     grad_W3 = AspB(grad_output.T, z2)
 
+    grad_z2 = grad_output @ W3
     _mask_with_bitmask_kernel[(z2.grid_m, z2.grid_n)](
         grad_z2, z2.bitmask,
         z2.shape[0], z2.shape[1],
@@ -217,8 +258,10 @@ def FFN3_backward(ctx, grad_output: Tensor):
     )
     del z2
 
-    grad_W2 = AspB(grad_z2.T, z1)
-    grad_z1 = grad_z2 @ W2
+    grad_W2 = ATspB_block(grad_z2, z1)
+
+    grad_z1 = grad_z2
+    grad_z1.addmm_(grad_output, W3, beta=0.0, alpha=1.0)        # Use same storage
 
     del grad_z2
     _mask_with_bitmask_kernel[(z1.grid_m, z1.grid_n)](
@@ -233,5 +276,4 @@ def FFN3_backward(ctx, grad_output: Tensor):
     grad_x = grad_z1 @ W1 if needs_x else None
     grad_W1 = grad_z1.T @ x
     del grad_z1
-
     return grad_x, grad_W1, grad_W2, grad_W3, None

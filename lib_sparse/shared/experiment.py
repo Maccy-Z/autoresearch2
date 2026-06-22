@@ -45,7 +45,7 @@ def run_step(x, model, buffer=None, sparse=False, steps=1):
 # Generate parameters
 # ------------------------------------------------------------------------------
 
-def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
+def gen_params(dim, G, dtype, expansion=5.25, device="cuda"):
     """ 2 layer FFN parameters """
     hdim = math.floor(dim * expansion)
     W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
@@ -59,7 +59,7 @@ def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
     return W1, W2
 
 
-def generate_parameters_3(dim, G, dtype, expansion=5.25, device="cuda"):
+def gen_params_3(dim, G, dtype, expansion=5.25, device="cuda"):
     """ 3 layer FFN parameters """
 
     hdim = math.floor(dim * expansion)

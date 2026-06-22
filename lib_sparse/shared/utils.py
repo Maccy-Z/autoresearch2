@@ -5,7 +5,7 @@ import torch
 RELU2_SCALE = 3 ** -0.5
 
 def print_memory(msg):
-    memory = torch.cuda.memory_allocated("cuda")/1024**2
+    memory = torch.cuda.max_memory_allocated("cuda")/1024**2
     print(f'{msg}: {memory:.2f} MB')
 
 

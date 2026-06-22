@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch._logging
 
 from forward_methods import FFNSparse, FFNSparse3
-from shared.experiment import generate_parameters, generate_parameters_3, FFN, FFN_3, run_step
+from shared.experiment import gen_params, gen_params_3, FFN, FFN_3, run_step
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
 FFN_BLOCK_LAYERS = 3
@@ -21,11 +21,11 @@ class DeepFFN(nn.Module):
         self.W1s, self.W2s, self.W3s = nn.ParameterList(), nn.ParameterList(), nn.ParameterList()
         for _ in range(layers):
             if self.block_layers == 2:
-                W1, W2 = generate_parameters(hidm, G, dtype=dtype)
+                W1, W2 = gen_params(hidm, G, dtype=dtype)
                 self.W1s.append(nn.Parameter(W1))
                 self.W2s.append(nn.Parameter(W2))
             else:
-                W1, W2, W3 = generate_parameters_3(hidm, G, dtype=dtype)
+                W1, W2, W3 = gen_params_3(hidm, G, dtype=dtype)
                 self.W1s.append(nn.Parameter(W1))
                 self.W2s.append(nn.Parameter(W2))
                 self.W3s.append(nn.Parameter(W3))
