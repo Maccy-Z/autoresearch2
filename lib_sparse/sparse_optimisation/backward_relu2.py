@@ -8,6 +8,8 @@ from sparse_kernels import (
     _unpack_relu2_batch_kernel,
 )
 
+from shared.utils import inplace_mm_
+
 def AspRelu2B(A: Tensor, B_sparse) -> Tensor:
     vals = B_sparse.vals
     bitmask = B_sparse.bitmask
@@ -137,7 +139,7 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     grad_W2 = AspRelu2B_block(grad_z2, z1)
 
     grad_z1 = grad_z2
-    grad_z1.addmm_(grad_output, W3, beta=0.0, alpha=1.0)        # Use same storage
+    inplace_mm_(grad_z1, W2)        # grad_z1 = grad_z2 @ W2
 
     _relu2_grad_with_sparse_kernel[(z1.grid_m, z1.grid_n)](
         grad_z1, z1.vals, z1.bitmask, z1.prefix, z1.vals_offset,

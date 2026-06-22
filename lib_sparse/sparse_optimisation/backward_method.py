@@ -122,7 +122,7 @@ def AspB(A: Tensor, B_sparse: BitsparseTensorBuffer) -> Tensor:
     return A @ dense
 
 
-def spAB(A_sparse: BitsparseTensorBuffer, B: Tensor, row_batch: int = 2048) -> Tensor:
+def spAB(A_sparse: BitsparseTensorBuffer, B: Tensor, row_batch: int = 20000) -> Tensor:
     """ y = A_sparse @ B
         A.shape = [M, N]
         B.shape = [N, K]
@@ -237,6 +237,8 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     return grad_x, grad_W1, grad_W2, None
 
 
+from shared.utils import print_memory, inplace_mm_
+
 def FFN3_backward(ctx, grad_output: Tensor):
     """Compute 3-layer ReLU FFN gradients using sparse saved activations."""
     x, W1, W2, W3 = ctx.saved_tensors
@@ -257,11 +259,12 @@ def FFN3_backward(ctx, grad_output: Tensor):
         num_warps=4, num_stages=2,
     )
     del z2
-
     grad_W2 = ATspB_block(grad_z2, z1)
 
+    # grad_z1 = grad_z2 @ W2
+    # Semi inplace variant to reduce peak memory.
     grad_z1 = grad_z2
-    grad_z1.addmm_(grad_output, W3, beta=0.0, alpha=1.0)        # Use same storage
+    inplace_mm_(grad_z1, W2)
 
     del grad_z2
     _mask_with_bitmask_kernel[(z1.grid_m, z1.grid_n)](
@@ -275,5 +278,6 @@ def FFN3_backward(ctx, grad_output: Tensor):
 
     grad_x = grad_z1 @ W1 if needs_x else None
     grad_W1 = grad_z1.T @ x
-    del grad_z1
+    print_memory("End")
+
     return grad_x, grad_W1, grad_W2, grad_W3, None

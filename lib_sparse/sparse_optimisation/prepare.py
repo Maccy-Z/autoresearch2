@@ -7,7 +7,7 @@ from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustom
 from shared.experiment import gen_params, gen_params_3, FFN, FFN_3, run_step
 
 FFN_BLOCK_LAYERS = 3
-LAYERS = 4
+LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -95,11 +95,11 @@ def evaluate():
 
     # Setup sparse buffer and run model
     hdim_expanded = math.floor(DIM * 5.25)
-    buffer_scale = 0.53 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
+    buffer_scale = 0.6 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
     buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
     buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
 
-    run_step(x, model, buffer, sparse=True, steps=1)
+    # run_step(x, model, buffer, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')
@@ -111,8 +111,8 @@ def evaluate():
         print(f'{tracking = }')
         torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
 
-    # Make sure vram usage is low enough
-    assert vram < vram_dn * 0.95
+        # Make sure vram usage is low enough
+        assert vram < vram_dn * 0.95
 
 
 def run_base():

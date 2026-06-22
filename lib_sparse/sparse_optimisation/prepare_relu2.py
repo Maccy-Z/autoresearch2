@@ -10,7 +10,7 @@ from shared.experiment import gen_params, gen_params_3, FFNRelu2_2, FFNRelu2_3, 
 
 
 FFN_BLOCK_LAYERS = 3
-LAYERS = 3
+LAYERS = 2
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -95,11 +95,13 @@ def evaluate():
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')
 
+    tracking = tracking * 1e3
+    tracking_dn = tracking_dn * 1e3
     if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
         print(f'Predicted values are different.')
-        print(f'{tracking_dn = }')
-        print(f'{tracking = }')
-        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
+    print(f'{tracking_dn = }')
+    print(f'{tracking = }')
+    torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
 
     assert vram < vram_dn * 1.1
 
