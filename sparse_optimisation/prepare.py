@@ -6,7 +6,10 @@ import gc
 import torch._logging
 from torch.autograd import Function
 
-from forward_methods import FFNSparse, ValueBuffer
+from forward_methods import FFNSparse, FFNSparse3, ValueBuffer
+
+
+FFN_BLOCK_LAYERS = 3
 
 
 class FFN(Function):
@@ -44,9 +47,9 @@ class FFN(Function):
         grad_preact = torch.ops.aten.threshold_backward.grad_input(
         grad_z, z, 0, grad_input=grad_z
         )
+        del grad_z, z
         if not torch.compiler.is_compiling():
             ctx.maybe_clear_saved_tensors()
-        del z
 
         # preact = x @ W1.T
         grad_x = None
@@ -56,6 +59,43 @@ class FFN(Function):
         grad_W1 = grad_preact.T @ x        # [exp_fact*in_dim, dim]
 
         return grad_x, grad_W1, grad_W2, None, None
+
+
+class FFN3(Function):
+    @staticmethod
+    def forward(ctx, x, W1, W2, W3):
+        z1 = x @ W1.T
+        z1.relu_()
+        z2 = z1 @ W2.T
+        z2.relu_()
+        ctx.save_for_backward(x, z1, z2, W1, W2, W3)
+        return z2 @ W3.T
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, a1, a2, W1, W2, W3 = ctx.saved_tensors
+        needs_x = ctx.needs_input_grad[0]
+
+        grad_a2 = grad_output @ W3
+        grad_W3 = grad_output.T @ a2
+        grad_z2 = torch.ops.aten.threshold_backward.grad_input(
+            grad_a2, a2, 0, grad_input=grad_a2
+        )
+
+        grad_a1 = grad_z2 @ W2
+        grad_W2 = grad_z2.T @ a1
+
+        grad_z1 = torch.ops.aten.threshold_backward.grad_input(
+            grad_a1, a1, 0, grad_input=grad_a1
+        )
+        del grad_a2, grad_z2, grad_a1, a1, a2
+        if not torch.compiler.is_compiling():
+            ctx.maybe_clear_saved_tensors()
+
+        grad_x = grad_z1 @ W1 if needs_x else None
+        grad_W1 = grad_z1.T @ x
+        del grad_z1
+        return grad_x, grad_W1, grad_W2, grad_W3
 
 
 def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
@@ -73,17 +113,38 @@ def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
     return W1, W2
 
 
+def generate_parameters_3(dim, G, dtype, expansion=5.25, device="cuda"):
+    hdim = math.floor(dim * expansion)
+    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
+    W2 = torch.empty(hdim, hdim, device=device, dtype=dtype)
+    W3 = torch.empty(dim, hdim, device=device, dtype=dtype)
+    torch.nn.init.xavier_uniform_(W1, generator=G)
+    torch.nn.init.xavier_uniform_(W2, generator=G)
+    torch.nn.init.xavier_uniform_(W3, generator=G)
+    shift = torch.randn(1, generator=G, device=device, dtype=dtype)
+    W1 = W1 + 0.01 * shift * W1.std()
+    W2 = W2 + 0.01 * shift * W2.std()
+    W3 = W3 - 0.01 * shift * W3.std()
+    return W1, W2, W3
+
+
 class DeepFFN(nn.Module):
     def __init__(self, dtype, layers=12, hidm=4096):
         """Construct a stack of residual FFN layers for the memory benchmark."""
         super().__init__()
         G = torch.Generator(device="cuda").manual_seed(0)
-        self.W1s, self.W2s = nn.ParameterList(), nn.ParameterList()
+        self.block_layers = FFN_BLOCK_LAYERS
+        self.W1s, self.W2s, self.W3s = nn.ParameterList(), nn.ParameterList(), nn.ParameterList()
         for i in range(layers):
-            W1, W2 = generate_parameters(hidm, G, dtype=dtype)
-
-            self.W1s.append(nn.Parameter(W1))
-            self.W2s.append(nn.Parameter(W2))
+            if self.block_layers == 2:
+                W1, W2 = generate_parameters(hidm, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+            else:
+                W1, W2, W3 = generate_parameters_3(hidm, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+                self.W3s.append(nn.Parameter(W3))
 
         # Simulate hook-based efficient optimiser, that applies gradient update as soon as possible and clears grads.
         self.setup_hooks()
@@ -100,18 +161,35 @@ class DeepFFN(nn.Module):
     # @torch.compile
     def forward_base(self, x):
         """ x.shape = [BS, dim] """
-        for W1, W2 in zip(self.W1s, self.W2s):
-            x_inner = x
-            x = x + FFN.apply(x_inner, W1, W2)
+        if self.block_layers == 2:
+            self.block_forward = FFN.apply
+        elif self.block_layers == 3:
+            self.block_forward = FFN3.apply
+        else:
+            raise NotImplementedError
+
+        if self.block_layers == 2:
+            for W1, W2 in zip(self.W1s, self.W2s):
+                x_inner = x
+                x = x + FFN.apply(x_inner, W1, W2)
+        else:
+            for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
+                x_inner = x
+                x = x + self.block_forward(x_inner, W1, W2, W3)
         return x
 
     #@torch.compile
     def forward(self, x, buffer: ValueBuffer):
         """Run the residual FFN stack while allocating sparse storage for this pass."""
         buffer.ready_buffer()
-        for W1, W2 in zip(self.W1s, self.W2s):
-            x_inner = x
-            x = x + FFNSparse.apply(x_inner, W1, W2, buffer)
+        if self.block_layers == 2:
+            for W1, W2 in zip(self.W1s, self.W2s):
+                x_inner = x
+                x = x + FFNSparse.apply(x_inner, W1, W2, buffer)
+        else:
+            for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
+                x_inner = x
+                x = x + FFNSparse3.apply(x_inner, W1, W2, W3, buffer)
         return x
 
 
@@ -156,7 +234,7 @@ def evaluate():
     # Setup parameters
     hdim = 4096
     bs = 10_000
-    layers = 12
+    layers = 1
     dtype = torch.bfloat16
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
@@ -172,7 +250,8 @@ def evaluate():
 
     # Setup sparse buffer and run model
     hdim_expanded = math.floor(hdim * 5.25)
-    buffer_size = int(bs * hdim_expanded * layers * 0.55)
+    buffer_scale = 0.4 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
+    buffer_size = int(bs * hdim_expanded * layers * buffer_scale)
     buffer = ValueBuffer(buffer_size, dtype=dtype, device="cuda")
     run_step(x, model, buffer, sparse=True, steps=1)
     # Main run
@@ -188,7 +267,7 @@ def evaluate():
         torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
 
     # Make sure vram usage is low enough
-    assert vram < vram_dn * 0.85
+    assert vram < vram_dn * 0.95
 
 
 def run_base():

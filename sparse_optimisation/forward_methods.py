@@ -3,7 +3,7 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import FFN_backward
+from backward_method import FFN_backward, FFN3_backward
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor, ValueBuffer
 
@@ -136,6 +136,22 @@ class FFNSparse(Function):
         return preact @ W2.T
 
     backward = staticmethod(BACKWARD_IMPL)
+
+
+class FFNSparse3(Function):
+    """Autograd FFN block with two hidden ReLU layers."""
+    @staticmethod
+    def forward(ctx, x, W1, W2, W3, sparse_data):
+        ctx.save_for_backward(x, W1, W2, W3)
+        z1 = x @ W1.T
+        z1.relu_()
+        ctx.z1_sparse = dense_to_tilesparse(z1, sparse_data)
+        z2 = z1 @ W2.T
+        z2.relu_()
+        ctx.z2_sparse = dense_to_tilesparse(z2, sparse_data)
+        return z2 @ W3.T
+
+    backward = staticmethod(FFN3_backward)
 
 
 class FFNSparseCustomOp(Function):

@@ -193,3 +193,43 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     else:
         grad_x = None
     return grad_x, grad_W1, grad_W2, None
+
+
+def FFN3_backward(ctx, grad_output: Tensor):
+    """Compute 3-layer ReLU FFN gradients using sparse saved activations."""
+    x, W1, W2, W3 = ctx.saved_tensors
+    z1 = ctx.z1_sparse
+    z2 = ctx.z2_sparse
+    ctx.z1_sparse = None
+    ctx.z2_sparse = None
+    needs_x = ctx.needs_input_grad[0]
+
+    grad_W3 = AspB(grad_output.T, z2)
+
+    grad_z2 = grad_output @ W3
+    _mask_with_bitmask_kernel[(z2.grid_m, z2.grid_n)](
+        grad_z2, z2.bitmask,
+        z2.shape[0], z2.shape[1],
+        BLOCK_M=z2.BLOCK_M, BLOCK_N=z2.BLOCK_N,
+        TILE_BYTES=z2.BLOCK_M * z2.BLOCK_N // 8,
+        num_warps=4, num_stages=2,
+    )
+    del z2
+
+    grad_W2 = AspB(grad_z2.T, z1)
+
+    grad_z1 = grad_z2 @ W2
+    del grad_z2, W3
+    _mask_with_bitmask_kernel[(z1.grid_m, z1.grid_n)](
+        grad_z1, z1.bitmask,
+        z1.shape[0], z1.shape[1],
+        BLOCK_M=z1.BLOCK_M, BLOCK_N=z1.BLOCK_N,
+        TILE_BYTES=z1.BLOCK_M * z1.BLOCK_N // 8,
+        num_warps=4, num_stages=2,
+    )
+    del z1
+
+    grad_x = grad_z1 @ W1 if needs_x else None
+    grad_W1 = grad_z1.T @ x
+    del grad_z1, x, W1, W2
+    return grad_x, grad_W1, grad_W2, grad_W3, None
