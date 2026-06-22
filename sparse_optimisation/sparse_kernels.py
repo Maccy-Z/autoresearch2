@@ -159,6 +159,46 @@ def _unpack_batch_kernel(
     tl.store(dense_ptr + offs, v_2d, mask=(offs_m < batch_rows) & (offs_k < K))
 
 
+@triton.jit
+def _unpack_relu2_batch_kernel(
+    vals_ptr, bitmask_ptr, prefix_ptr, vals_offset_ptr,
+    dense_ptr,
+    first_m_tile, grid_n_sparse, K, batch_rows,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    RELU2_SCALE: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    row_tile_in_batch = pid // grid_n_sparse
+    k_tile = pid % grid_n_sparse
+
+    orig_row_tile = first_m_tile + row_tile_in_batch
+    tile_id = orig_row_tile * grid_n_sparse + k_tile
+
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    bit_pos = tl.arange(0, 8)[None, :]
+    bits = (bytes_2d >> bit_pos) & 1
+    mask_bits = tl.reshape(bits.to(tl.int32), (TILE_NUMEL,))
+
+    offset = tl.load(vals_offset_ptr)
+    base = tl.load(prefix_ptr + tile_id) + offset
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    r = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
+    rdtype = r.dtype
+    r = r.to(tl.float32)
+    z = RELU2_SCALE * r * r
+    z = z.to(rdtype)
+    z_2d = tl.reshape(z, (BLOCK_M, BLOCK_N))
+
+    row_base = row_tile_in_batch * BLOCK_M
+    offs_m = (row_base + tl.arange(0, BLOCK_M))[:, None]
+    offs_k = (k_tile * BLOCK_N + tl.arange(0, BLOCK_N))[None, :]
+    offs = offs_m * K + offs_k
+    tl.store(dense_ptr + offs, z_2d, mask=(offs_m < batch_rows) & (offs_k < K))
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Kernel 4 — _mask_with_bitmask_kernel
 #   In-place masks a dense gradient matrix ∂L/∂Z using the stored bitmask.
@@ -194,6 +234,41 @@ def _mask_with_bitmask_kernel(
     # Element-wise:  gz[p,q] = 0 if Z[p,q] ≤ 0, else gz[p,q]
     masked = tl.where(bits != 0, gz, 0.0)
     tl.store(grad_ptr + offs, masked, mask=(rm[:, None] < M) & (rn[None, :] < N))
+
+
+@triton.jit
+def _relu2_grad_with_sparse_kernel(
+    grad_ptr, vals_ptr, bitmask_ptr, prefix_ptr, vals_offset_ptr,
+    M, N,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    RELU2_SCALE: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    grid_n = tl.num_programs(1)
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs = rm[:, None] * N + rn[None, :]
+    grad = tl.load(grad_ptr + offs, mask=(rm[:, None] < M) & (rn[None, :] < N), other=0.0)
+
+    tile_id = pid_m * grid_n + pid_n
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    mask_bits = tl.reshape((bytes_2d >> tl.arange(0, 8)[None, :]) & 1, (TILE_NUMEL,))
+
+    offset = tl.load(vals_offset_ptr)
+    base = tl.load(prefix_ptr + tile_id) + offset
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    r = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0).to(tl.float32)
+    scale = 2.0 * RELU2_SCALE * r
+    scale_2d = tl.reshape(scale, (BLOCK_M, BLOCK_N))
+    bits_2d = tl.reshape(mask_bits, (BLOCK_M, BLOCK_N))
+
+    grad_preact = tl.where(bits_2d != 0, grad * scale_2d, 0.0)
+    tl.store(grad_ptr + offs, grad_preact, mask=(rm[:, None] < M) & (rn[None, :] < N))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -260,3 +335,55 @@ def _grad_z_sparse_values_kernel(
     vals = tl.reshape(acc, (TILE_NUMEL,))
     base = tl.load(vals_offset_ptr) + tl.load(prefix_ptr + tile_id)
     tl.store(vals_out_ptr + base + ranks, vals, mask=(mask_bits == 1))
+
+
+@triton.jit
+def _relu2_grad_sparse_values_kernel(
+    grad_output_ptr,
+    W2_ptr,
+    vals_ptr,
+    bitmask_ptr,
+    prefix_ptr,
+    vals_offset_ptr,
+    vals_out_ptr,
+    M, N, grid_n,
+    D: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
+    RELU2_SCALE: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    tile_id = pid_m * grid_n + pid_n
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k_start in range(0, D, BLOCK_K):
+        k = k_start + offs_k
+        go = tl.load(
+            grad_output_ptr + offs_m[:, None] * D + k[None, :],
+            mask=(offs_m[:, None] < M) & (k[None, :] < D),
+            other=0.0,
+        )
+        w2 = tl.load(
+            W2_ptr + k[:, None] * N + offs_n[None, :],
+            mask=(k[:, None] < D) & (offs_n[None, :] < N),
+            other=0.0,
+        )
+        acc += tl.dot(go, w2)
+
+    byte_offs = tile_id * TILE_BYTES + tl.arange(0, TILE_BYTES)
+    bytes_val = tl.load(bitmask_ptr + byte_offs).to(tl.int32)
+    bytes_2d = tl.reshape(bytes_val, (TILE_BYTES, 1))
+    mask_bits = tl.reshape((bytes_2d >> tl.arange(0, 8)[None, :]) & 1, (TILE_NUMEL,))
+
+    offset = tl.load(vals_offset_ptr)
+    base = tl.load(prefix_ptr + tile_id) + offset
+    ranks = tl.cumsum(mask_bits, 0) - 1
+    r = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0).to(tl.float32)
+    grad_flat = tl.reshape(acc, (TILE_NUMEL,)) * (2.0 * RELU2_SCALE * r)
+    tl.store(vals_out_ptr + base + ranks, grad_flat, mask=(mask_bits == 1))
