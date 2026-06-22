@@ -2,11 +2,9 @@ import torch
 from torch import Tensor
 
 from forward_relu2 import RELU2_SCALE
-from backward_method import AspB_block, spAB, grad_z_sparse_inplace
+from backward_method import spAB, grad_z_sparse_inplace
 from sparse_kernels import (
-    _relu2_grad_sparse_values_kernel,
     _relu2_grad_with_sparse_kernel,
-    _unpack_batch_kernel,
     _unpack_relu2_batch_kernel,
 )
 
@@ -33,9 +31,7 @@ def AspRelu2B(A: Tensor, B_sparse) -> Tensor:
         RELU2_SCALE=RELU2_SCALE,
         num_warps=8, num_stages=3,
     )
-    out = A @ dense
-    print_vram("During AspRelu2B")
-    return out
+    return A @ dense
 
 
 def AspRelu2B_block(A: Tensor, B_sparse, row_batch: int = 512) -> Tensor:
@@ -115,9 +111,6 @@ def FFN_relu2_backward_sparse(ctx, grad_output: Tensor):
     grad_x = spAB(grad_z_sparse, W1) if needs_x else None
     return grad_x, grad_W1, grad_W2, None
 
-
-def print_vram(s):
-    print(f'{s}, {torch.cuda.max_memory_allocated() //1024**2} MB')
 
 def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     x, W1, W2, W3 = ctx.saved_tensors

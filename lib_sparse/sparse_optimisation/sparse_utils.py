@@ -5,11 +5,11 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-class BitsparseTensor:
-    """Bitmask sparse tensor."""
+class BitsparseTensorBuffer:
+    """Bitmask sparse tensor. Using the shared buffer. """
     vals: Tensor            # Nonzero values
     bitmask: Tensor         # Bitmask of nonzero values.
-    prefix: Tensor          # Int32 tensor of where each block starts in the vals array.
+    prefix: Tensor          # Int32 tensor of where each block starts in the vals array. Last element is total size.
     vals_offset: Tensor     # Starting offset in vals for each tile.
     BLOCK_M: int            # Size of each tile [M, N]
     BLOCK_N: int
@@ -32,19 +32,19 @@ class BitsparseTensor:
 
     def __repr__(self):
         return (f"BitsparseTensor(shape={list(self.shape)}, "
-                f"nnz={self.vals.numel()})\n")
+                f"nnz={self.prefix[-1]}, sparsity={self.sparsity_ratio():.2f})")
 
     def vram_size(self):
-        val_size = self.vals.element_size() * self.vals.nelement()
+        val_size = self.vals.element_size() * self.prefix[-1]
         bitmask_size = self.bitmask.element_size() * self.bitmask.nelement()
         prefix_size = self.prefix.element_size() * self.prefix.nelement()
         return (val_size + bitmask_size + prefix_size)/1024**2
 
     def sparsity_ratio(self):
-        return self.vals.numel() / (self.shape[0] * self.shape[1])
+        return 1-self.prefix[-1] / (self.shape[0] * self.shape[1])
 
 
-class ValueBuffer:
+class TensorBuffer:
     vals: Tensor = None
     offset: Tensor = None
 

@@ -3,10 +3,10 @@ from torch import Tensor
 
 from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel, \
     _grad_z_sparse_values_kernel
-from sparse_utils import BitsparseTensor
+from sparse_utils import BitsparseTensorBuffer
 
 
-def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=20000) -> Tensor:
+def AspB_block(A: Tensor, B_sparse: BitsparseTensorBuffer, row_batch=20000) -> Tensor:
     """ y = A @ B_sparse. Done blockwise to reduce peak vram usage.
         A.shape = [K, M]
         B.shape = [M, N]
@@ -48,7 +48,7 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=20000) -> Tensor:
     return out
 
 
-def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
+def AspB(A: Tensor, B_sparse: BitsparseTensorBuffer) -> Tensor:
     """
     y = A @ B_sparse.
     A.shape = [K, M]
@@ -80,7 +80,7 @@ def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     return A @ dense
 
 
-def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
+def spAB(A_sparse: BitsparseTensorBuffer, B: Tensor, row_batch: int = 2048) -> Tensor:
     """ y = A_sparse @ B
         A.shape = [M, N]
         B.shape = [N, K]
@@ -120,9 +120,9 @@ def spAB(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
 
 
 def grad_z_sparse_inplace(
-    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
+    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensorBuffer,
     BLOCK_K: int = 32,
-) -> BitsparseTensor:
+) -> BitsparseTensorBuffer:
     """ Combine grad_z = grad_output @ W2,
                 grad_z = grad_z * (z>0)
                 grad_z = sparse(grad_z)
@@ -204,9 +204,10 @@ def FFN3_backward(ctx, grad_output: Tensor):
     ctx.z2_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W3 = AspB(grad_output.T, z2)
 
     grad_z2 = grad_output @ W3
+    grad_W3 = AspB(grad_output.T, z2)
+
     _mask_with_bitmask_kernel[(z2.grid_m, z2.grid_n)](
         grad_z2, z2.bitmask,
         z2.shape[0], z2.shape[1],
@@ -217,9 +218,9 @@ def FFN3_backward(ctx, grad_output: Tensor):
     del z2
 
     grad_W2 = AspB(grad_z2.T, z1)
-
     grad_z1 = grad_z2 @ W2
-    del grad_z2, W3
+
+    del grad_z2
     _mask_with_bitmask_kernel[(z1.grid_m, z1.grid_n)](
         grad_z1, z1.bitmask,
         z1.shape[0], z1.shape[1],
@@ -231,5 +232,6 @@ def FFN3_backward(ctx, grad_output: Tensor):
 
     grad_x = grad_z1 @ W1 if needs_x else None
     grad_W1 = grad_z1.T @ x
-    del grad_z1, x, W1, W2
+    del grad_z1
+
     return grad_x, grad_W1, grad_W2, grad_W3, None

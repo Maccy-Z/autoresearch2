@@ -3,9 +3,9 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import FFN_backward, FFN3_backward
+from backward_method import FFN_backward, FFN3_backward, FFN_backward_sparse
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
-from sparse_utils import BitsparseTensor, ValueBuffer
+from sparse_utils import BitsparseTensorBuffer, TensorBuffer
 
 
 DEFAULT_BLOCK_M = 128
@@ -27,11 +27,11 @@ def _make_bitsparse(
     vals: Tensor, bitmask: Tensor, prefix: Tensor,
     vals_offset: Tensor,
     shape: tuple[int, int], BLOCK_M: int, BLOCK_N: int,
-) -> BitsparseTensor:
+) -> BitsparseTensorBuffer:
     """Build a BitsparseTensor wrapper around packed values, bitmasks, and prefixes."""
     grid_m = (shape[0] + BLOCK_M - 1) // BLOCK_M
     grid_n = (shape[1] + BLOCK_N - 1) // BLOCK_N
-    return BitsparseTensor(
+    return BitsparseTensorBuffer(
         vals, bitmask, prefix, vals_offset,
         grid_m, grid_n, BLOCK_M, BLOCK_N,
         shape,
@@ -58,7 +58,7 @@ def _dense_to_tilesparse_pack_impl(
         num_warps=4, num_stages=2,
     )
 
-    total_offset = offset.clone()
+    new_offset = offset.clone()
 
     tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
@@ -66,7 +66,7 @@ def _dense_to_tilesparse_pack_impl(
 
     _compact_vals_kernel[(num_tiles,)](
         dense, tile_prefix, vals,
-        total_offset,
+        new_offset,
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
@@ -74,15 +74,15 @@ def _dense_to_tilesparse_pack_impl(
     )
 
     offset.add_(tile_prefix[-1])
-    return tile_bitmasks, tile_prefix, total_offset
+    return tile_bitmasks, tile_prefix, new_offset
 
 
 def dense_to_tilesparse(
     dense: Tensor,
-    sparse_data: ValueBuffer,
+    sparse_data: TensorBuffer,
     BLOCK_M: int = DEFAULT_BLOCK_M,
     BLOCK_N: int = DEFAULT_BLOCK_N,
-) -> BitsparseTensor:
+) -> BitsparseTensorBuffer:
     """Convert a dense activation matrix into a BitsparseTensor backed by sparse_data."""
     vals, offset = sparse_data.vals, sparse_data.offset
     bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
@@ -149,16 +149,17 @@ class FFNSparse3(Function):
         z2 = z1 @ W2.T
         z2.relu_()
         ctx.z2_sparse = dense_to_tilesparse(z2, sparse_data)
+
         return z2 @ W3.T
 
     backward = staticmethod(FFN3_backward)
 
 
 class FFNSparseCustomOp(Function):
-    """Forward with matmul, pack, and second matmul hidden behind one custom op."""
+    """Forward with matmul, pack, and second matmul hidden behind one custom op. Useful for compiling"""
 
     @staticmethod
-    def forward(ctx, x, W1, W2, sparse_data: ValueBuffer):
+    def forward(ctx, x, W1, W2, sparse_data: TensorBuffer):
         vals, offset = sparse_data.vals, sparse_data.offset
         output, bitmask, prefix, vals_offset = ffn_sparse_forward_op(
             x, W1, W2, vals, offset, DEFAULT_BLOCK_M, DEFAULT_BLOCK_N

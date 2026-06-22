@@ -2,138 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import time
-import math
 import gc
 import torch._logging
-from torch.autograd import Function
 
-from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3, RELU2_SCALE
-
+from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
+from shared.experiment import FFNRelu2_2, FFNRelu2_3, generate_parameters, generate_parameters_3
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 2
+FFN_BLOCK_LAYERS = 3
 LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096
-
-def print_memory(msg):
-    memory = torch.cuda.memory_allocated("cuda")/1024**2
-    print(f'{msg}: {memory:.2f} MB')
-
-
-class FFNRelu2_2(Function):
-    """Dense 2-layer FFN with ReLU-squared activation.
-
-    For ``x[B, D]``, ``W1[H, D]``, ``W2[D, H]`` computes
-    ``z = k * relu(x @ W1.T)^2`` and ``output = z @ W2.T``.
-    """
-    @staticmethod
-    def forward(ctx, x, W1, W2, e1=None):
-        preact = x @ W1.T
-        r = preact.relu_()         # save the relu output r
-        z = r.square()
-        z.mul_(RELU2_SCALE)        # z = k * r^2
-        ctx.save_for_backward(x, W1, W2, r)
-        return z @ W2.T
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, W1, W2, r = ctx.saved_tensors
-        needs_x = ctx.needs_input_grad[0]
-
-        grad_z = grad_output @ W2
-        z = r.square().mul_(RELU2_SCALE)
-        grad_W2 = grad_output.T @ z
-
-        grad_preact = grad_z * (2.0 * RELU2_SCALE * r)
-        del grad_z
-        grad_W1 = grad_preact.T @ x
-
-        del r, z
-        if not torch.compiler.is_compiling():
-            ctx.maybe_clear_saved_tensors()
-
-        grad_x = None
-        if needs_x:
-            grad_x = grad_preact @ W1
-
-        return grad_x, grad_W1, grad_W2, None, None
-
-
-class FFNRelu2_3(Function):
-    """Dense 3-layer FFN with ReLU-squared activations — in-place forward, saved relu masks."""
-    @staticmethod
-    def forward(ctx, x, W1, W2, W3):
-        z1 = x @ W1.T              # pre-activation 1  [B, H]
-        r1 = z1.relu_()            # r1 = relu(z1), in-place
-        z1 = r1.square()
-        z1.mul_(RELU2_SCALE)       # z1 = k * r1^2
-
-        z2 = z1 @ W2.T             # pre-activation 2  [B, H]
-        r2 = z2.relu_()            # r2 = relu(z2), in-place
-        z2 = r2.square()
-        z2.mul_(RELU2_SCALE)       # z2 = k * r2^2
-
-        ctx.save_for_backward(x, r1, r2, W1, W2, W3)
-        return z2 @ W3.T            # output [B, D]
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, r1, r2, W1, W2, W3 = ctx.saved_tensors
-        needs_x = ctx.needs_input_grad[0]
-
-        # layer 3: linear
-        grad_a2 = grad_output @ W3                                # [B, H]
-        grad_W3 = grad_output.T @ (r2.square().mul_(RELU2_SCALE)) # [D, H]
-        # relu2 backward: d/d(r2) of k*r2^2 = 2*k*r2
-        grad_z2 = grad_a2 * (2.0 * RELU2_SCALE * r2)
-
-        # layer 2: linear
-        grad_a1 = grad_z2 @ W2                                    # [B, H]
-        grad_W2 = grad_z2.T @ (r1.square().mul_(RELU2_SCALE))    # [H, H]
-        del grad_z2, grad_a2
-
-        # relu1 backward: d/d(r1) of k*r1^2 = 2*k*r1
-        grad_z1 = grad_a1 * (2.0 * RELU2_SCALE * r1)
-        del grad_a1, r1, r2
-        ctx.maybe_clear_saved_tensors()
-
-        # layer 1: linear
-        grad_x = grad_z1 @ W1 if needs_x else None
-        grad_W1 = grad_z1.T @ x                                   # [H, D]
-        del grad_z1
-
-        return grad_x, grad_W1, grad_W2, grad_W3
-
-
-def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
-    """Create FFN weights ``W1[H, dim]`` and ``W2[dim, H]`` with ``H=floor(dim*expansion)``."""
-    hdim = math.floor(dim * expansion)
-    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W1, generator=G)
-    W2 = torch.empty(dim, hdim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W2, generator=G)
-    shift = torch.randn(1, generator=G, device=device, dtype=dtype)
-    W1 = W1 + 0.01 * shift * W1.std()
-    W2 = W2 - 0.01 * shift * W2.std()
-    return W1, W2
-
-
-def generate_parameters_3(dim, G, dtype, expansion=5.25, device="cuda"):
-    """Create 3-layer FFN weights ``W1[H, D]``, ``W2[H, H]``, ``W3[D, H]``."""
-    hdim = math.floor(dim * expansion)
-    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
-    W2 = torch.empty(hdim, hdim, device=device, dtype=dtype)
-    W3 = torch.empty(dim, hdim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W1, generator=G)
-    torch.nn.init.xavier_uniform_(W2, generator=G)
-    torch.nn.init.xavier_uniform_(W3, generator=G)
-    shift = torch.randn(1, generator=G, device=device, dtype=dtype)
-    W1 = W1 + 0.01 * shift * W1.std()
-    W2 = W2 + 0.01 * shift * W2.std()
-    W3 = W3 - 0.01 * shift * W3.std()
-    print(f'{W1.nbytes/1024**2 = }, {W2.nbytes/1024**2 = }, {W3.nbytes/1024**2 = }')
-    return W1, W2, W3
 
 
 class DeepFFN(nn.Module):

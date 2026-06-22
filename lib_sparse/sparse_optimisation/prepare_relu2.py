@@ -5,107 +5,16 @@ import time
 import math
 import gc
 import torch._logging
-from torch.autograd import Function
 
-from forward_methods import ValueBuffer
+from forward_methods import TensorBuffer
 from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
+from shared.experiment import generate_parameters, generate_parameters_3, FFNRelu2_2, FFNRelu2_3
 
 
-RELU2_SCALE = 3 ** -0.5
-
-
-class FFNRelu2(Function):
-    @staticmethod
-    def forward(ctx, x, W1, W2):
-        z = x @ W1.T
-        r = z.relu_()
-        z = r.square()
-        z.mul_(RELU2_SCALE)
-        ctx.save_for_backward(x, W1, W2, r)
-        return z @ W2.T
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, W1, W2, r = ctx.saved_tensors
-        needs_x = ctx.needs_input_grad[0]
-
-        z = r.square().mul_(RELU2_SCALE)
-        grad_W2 = grad_output.T @ z
-        del z
-        grad_z = grad_output @ W2
-        grad_preact = grad_z * (2.0 * RELU2_SCALE * r)
-        del grad_z
-        if not torch.compiler.is_compiling():
-            ctx.maybe_clear_saved_tensors()
-
-        grad_x = grad_preact @ W1 if needs_x else None
-        grad_W1 = grad_preact.T @ x
-        return grad_x, grad_W1, grad_W2
-
-
-class FFNRelu2_3(Function):
-    @staticmethod
-    def forward(ctx, x, W1, W2, W3):
-        z1 = x @ W1.T
-        r1 = z1.relu_()
-        z1 = r1.square()
-        z1.mul_(RELU2_SCALE)
-
-        z2 = z1 @ W2.T
-        r2 = z2.relu_()
-        z2 = r2.square()
-        z2.mul_(RELU2_SCALE)
-
-        ctx.save_for_backward(x, r1, r2, W1, W2, W3)
-        return z2 @ W3.T
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, r1, r2, W1, W2, W3 = ctx.saved_tensors
-        needs_x = ctx.needs_input_grad[0]
-
-        grad_a2 = grad_output @ W3
-        grad_W3 = grad_output.T @ (r2.square().mul_(RELU2_SCALE))
-        grad_z2 = grad_a2 * (2.0 * RELU2_SCALE * r2)
-
-        grad_a1 = grad_z2 @ W2
-        grad_W2 = grad_z2.T @ (r1.square().mul_(RELU2_SCALE))
-        del grad_z2, grad_a2
-
-        grad_z1 = grad_a1 * (2.0 * RELU2_SCALE * r1)
-        if not torch.compiler.is_compiling():
-            ctx.maybe_clear_saved_tensors()
-
-        grad_x = grad_z1 @ W1 if needs_x else None
-        grad_W1 = grad_z1.T @ x
-        return grad_x, grad_W1, grad_W2, grad_W3
-
-
-def generate_parameters(dim, G, dtype, expansion=5.25, device="cuda"):
-    hdim = math.floor(dim * expansion)
-    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W1, generator=G)
-    W2 = torch.empty(dim, hdim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W2, generator=G)
-    shift = torch.randn(1, generator=G, device=device, dtype=dtype)
-    W1 = W1 + 0.01 * shift * W1.std()
-    W2 = W2 - 0.01 * shift * W2.std()
-    return W1, W2
-
-
-def generate_parameters_3(dim, G, dtype, expansion=5.25, device="cuda"):
-    hdim = math.floor(dim * expansion)
-    W1 = torch.empty(hdim, dim, device=device, dtype=dtype)
-    W2 = torch.empty(hdim, hdim, device=device, dtype=dtype)
-    W3 = torch.empty(dim, hdim, device=device, dtype=dtype)
-    torch.nn.init.xavier_uniform_(W1, generator=G)
-    torch.nn.init.xavier_uniform_(W2, generator=G)
-    torch.nn.init.xavier_uniform_(W3, generator=G)
-    shift = torch.randn(1, generator=G, device=device, dtype=dtype)
-    W1 = W1 + 0.01 * shift * W1.std()
-    W2 = W2 + 0.01 * shift * W2.std()
-    W3 = W3 - 0.01 * shift * W3.std()
-    return W1, W2, W3
+FFN_BLOCK_LAYERS = 3
+LAYERS = 3
+BATCH_SIZE = 10000
+DIM = 4096
 
 
 class DeepFFN(nn.Module):
@@ -127,7 +36,7 @@ class DeepFFN(nn.Module):
         if self.block_layers == 3:
             self.block_forward = FFNRelu2_3.apply
         elif self.block_layers == 2:
-            self.block_forward = FFNRelu2.apply
+            self.block_forward = FFNRelu2_2.apply
         else:
             raise NotImplementedError
         self.setup_hooks()
@@ -165,7 +74,7 @@ class DeepFFN(nn.Module):
         return x
 
 
-def run_step(x, model, buffer: ValueBuffer = None, sparse=False, steps=1):
+def run_step(x, model, buffer: TensorBuffer = None, sparse=False, steps=1):
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
@@ -199,19 +108,16 @@ def run_step(x, model, buffer: ValueBuffer = None, sparse=False, steps=1):
 
 def make_sparse_buffer(bs, hdim, layers, block_layers):
     factor = 0.55 * (2 if block_layers == 3 else 1)
-    return ValueBuffer(int(bs * math.floor(hdim * 5.25) * layers * factor), dtype=torch.bfloat16, device="cuda")
+    return TensorBuffer(int(bs * math.floor(hdim * 5.25) * layers * factor), dtype=torch.bfloat16, device="cuda")
 
 
 def evaluate():
-    hdim = 4096
-    bs = 10_000
-    layers = 3
     dtype = torch.bfloat16
     G = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
+    x = torch.randn(BATCH_SIZE, DIM, dtype=dtype, device="cuda", generator=G, requires_grad=True)
 
-    model = DeepFFN(layers=layers, hidm=hdim, dtype=dtype, block_layers=2)
-    model._sparse_data = make_sparse_buffer(bs, hdim, layers, 3)
+    model = DeepFFN(layers=LAYERS, hidm=DIM, dtype=dtype, block_layers=FFN_BLOCK_LAYERS)
+    model._sparse_data = make_sparse_buffer(BATCH_SIZE, DIM, LAYERS, 3)
 
     run_step(x, model, sparse=False, steps=1)
     tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
