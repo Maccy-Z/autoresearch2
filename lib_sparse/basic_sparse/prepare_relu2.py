@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import time
-import gc
 import torch._logging
 
 from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3

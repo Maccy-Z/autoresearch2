@@ -139,7 +139,7 @@ class FFNRelu2_3(Function):
         grad_W3 = grad_output.T @ (r2.square().mul_(RELU2_SCALE)) # [D, H]
         # relu2 backward: d/d(r2) of k*r2^2 = 2*k*r2
         grad_z2 = grad_a2 * (2.0 * RELU2_SCALE * r2)
-
+        del r2
         # layer 2: linear
         grad_a1 = grad_z2 @ W2                                    # [B, H]
         grad_W2 = grad_z2.T @ (r1.square().mul_(RELU2_SCALE))    # [H, H]
@@ -147,7 +147,7 @@ class FFNRelu2_3(Function):
 
         # relu1 backward: d/d(r1) of k*r1^2 = 2*k*r1
         grad_z1 = grad_a1 * (2.0 * RELU2_SCALE * r1)
-        del grad_a1, r1, r2
+        del grad_a1, r1
         if not torch.compiler.is_compiling():
             ctx.maybe_clear_saved_tensors()
         # layer 1: linear

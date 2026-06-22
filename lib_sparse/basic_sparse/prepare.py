@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import time
-import gc
 import torch._logging
 
 from forward_methods import FFNSparse, FFNSparse3
