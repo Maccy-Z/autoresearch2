@@ -131,7 +131,10 @@ def _unpack_relu2_batch_kernel(
     base = tl.load(prefix_ptr + tile_id)
     ranks = tl.cumsum(mask_bits, 0) - 1
     r = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
+    rdtype = r.dtype
+    r = r.to(tl.float32)        # Stop numerical issues
     z = RELU2_SCALE * r * r
+    z = z.to(rdtype)
     z_2d = tl.reshape(z, (BLOCK_M, BLOCK_N))
 
     row_base = row_tile_in_batch * BLOCK_M

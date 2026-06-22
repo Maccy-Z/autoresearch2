@@ -5,6 +5,30 @@ from sparse_kernels import _unpack_batch_kernel, _mask_with_bitmask_kernel
 from sparse_utils import BitsparseTensor
 
 
+def unpack_sparse(X: BitsparseTensor) -> Tensor:
+    vals = X.vals
+    bitmask = X.bitmask
+    prefix = X.prefix
+    BLOCK_M, BLOCK_N = X.BLOCK_M, X.BLOCK_N
+    grid_m, grid_n = X.grid_m, X.grid_n
+    M, N = X.shape
+
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
+    num_tiles = grid_m * grid_n
+
+    dense = torch.empty(M, N, device=vals.device, dtype=vals.dtype)
+    _unpack_batch_kernel[(num_tiles,)](
+        vals, bitmask, prefix,
+        dense,
+        0, grid_n, N, M,
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
+        num_warps=8, num_stages=2,
+    )
+
+    return dense
+
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     """Compute ``A @ B`` where ``B`` is stored as ``BitsparseTensor``.
 

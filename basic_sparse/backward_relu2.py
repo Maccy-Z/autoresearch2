@@ -199,11 +199,12 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
         RELU2_SCALE=RELU2_SCALE,
         num_warps=8, num_stages=2,
     )
-
+    del z2
     grad_preact2 = grad_z2
     grad_W2 = AspRelu2B(grad_preact2.T, z1)
 
     grad_z1 = grad_preact2 @ W2
+    del grad_preact2, grad_z2
     _relu2_grad_with_sparse_kernel[(z1.grid_m, z1.grid_n)](
         grad_z1, z1.vals, z1.bitmask, z1.prefix,
         z1.shape[0], z1.shape[1],
@@ -213,7 +214,7 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
         RELU2_SCALE=RELU2_SCALE,
         num_warps=8, num_stages=2,
     )
-
+    del z1
     if needs_x:
         grad_x = grad_z1 @ W1
     else:

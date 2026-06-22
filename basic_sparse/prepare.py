@@ -105,8 +105,6 @@ class FFNv4(Function):
     def backward(ctx, grad_output):
         x, a1, a2, W1, W2, W3 = ctx.saved_tensors
         needs_x = ctx.needs_input_grad[0]
-        torch.cuda.empty_cache()
-        print_memory("Start allocated")
         # a1, a2 are already post-activation (relu_ was in-place)
 
         # layer 3: linear
@@ -134,7 +132,6 @@ class FFNv4(Function):
 
         grad_W1 = grad_z1.T @ x             # [H, D]
         del grad_z1
-        print_memory("Alloc at end of block")
 
         return grad_x, grad_W1, grad_W2, grad_W3
 
@@ -246,18 +243,18 @@ def evaluate():
     print(f"Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms")
     print("-" * 50)
 
-    # # run_step(x, model, sparse=True, steps=1)
-    # tracking, vram, avg_time = run_step(x, model, sparse=True, steps=1)
-    # print(f"VRAM allocated by tensors: {vram:.2f} MB")
-    # print(f"Total time: {avg_time:.2f} ms")
-    #
-    # if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
-    #     print("Predicted values are different.")
-    #     print(f"{tracking_dn = }")
-    #     print(f"{tracking = }")
-    #     torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
-    #
-    #     assert vram < vram_dn * 0.88
+    # run_step(x, model, sparse=True, steps=1)
+    tracking, vram, avg_time = run_step(x, model, sparse=True, steps=1)
+    print(f"VRAM allocated by tensors: {vram:.2f} MB")
+    print(f"Total time: {avg_time:.2f} ms")
+
+    if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
+        print("Predicted values are different.")
+        print(f"{tracking_dn = }")
+        print(f"{tracking = }")
+        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
+
+        assert vram < vram_dn * 0.88
 
 
 def run_base():
