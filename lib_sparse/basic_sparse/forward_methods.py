@@ -5,20 +5,11 @@ from torch.autograd import Function
 from backward_method import FFN_backward, FFN3_backward
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensor
+from shared.utils import _tile_grid
 
 
 BLOCK_M = 128
 BLOCK_N = 128
-
-
-def _tile_grid(M: int, N: int) -> tuple[int, int, int, int, int]:
-    """Return tile grid metadata for a dense ``M x N`` matrix."""
-    TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-    grid_m = (M + BLOCK_M - 1) // BLOCK_M
-    grid_n = (N + BLOCK_N - 1) // BLOCK_N
-    num_tiles = grid_m * grid_n
-    return grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES
 
 
 def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
@@ -28,7 +19,7 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
     ``vals = dense[mask]`` in row-major tile order.
     """
     M, N = dense.shape
-    grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N)
+    grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N, BLOCK_M, BLOCK_N)
 
     tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)

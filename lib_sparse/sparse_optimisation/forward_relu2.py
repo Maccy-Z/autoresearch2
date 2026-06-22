@@ -1,9 +1,7 @@
 from torch.autograd import Function
 
 from forward_methods import dense_to_tilesparse
-
-
-RELU2_SCALE = 3 ** -0.5
+from shared.utils import RELU2_SCALE
 
 
 class FFNSparseRelu2(Function):

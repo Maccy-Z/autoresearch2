@@ -4,10 +4,10 @@ from torch import Tensor
 from forward_relu2 import RELU2_SCALE
 from sparse_kernels import (
     _relu2_grad_sparse_values_kernel,
-    _relu2_grad_with_sparse_kernel,
     _unpack_batch_kernel,
     _unpack_relu2_batch_kernel,
 )
+from shared.kernels import _relu2_grad_with_sparse_kernel
 
 
 def AspRelu2B(A: Tensor, B_sparse) -> Tensor:
@@ -142,6 +142,7 @@ def FFN_relu2_backward(ctx, grad_output: Tensor):
     grad_z = grad_output @ W2
     _relu2_grad_with_sparse_kernel[(z.grid_m, z.grid_n)](
         grad_z, z.vals, z.bitmask, z.prefix,
+        torch.tensor(0, device=z.vals.device, dtype=torch.int32),
         z.shape[0], z.shape[1],
         BLOCK_M=z.BLOCK_M, BLOCK_N=z.BLOCK_N,
         TILE_NUMEL=z.BLOCK_M * z.BLOCK_N,
@@ -192,6 +193,7 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     grad_z2 = grad_output @ W3
     _relu2_grad_with_sparse_kernel[(z2.grid_m, z2.grid_n)](
         grad_z2, z2.vals, z2.bitmask, z2.prefix,
+        torch.tensor(0, device=z2.vals.device, dtype=torch.int32),
         z2.shape[0], z2.shape[1],
         BLOCK_M=z2.BLOCK_M, BLOCK_N=z2.BLOCK_N,
         TILE_NUMEL=z2.BLOCK_M * z2.BLOCK_N,
@@ -207,6 +209,7 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     del grad_preact2, grad_z2
     _relu2_grad_with_sparse_kernel[(z1.grid_m, z1.grid_n)](
         grad_z1, z1.vals, z1.bitmask, z1.prefix,
+        torch.tensor(0, device=z1.vals.device, dtype=torch.int32),
         z1.shape[0], z1.shape[1],
         BLOCK_M=z1.BLOCK_M, BLOCK_N=z1.BLOCK_N,
         TILE_NUMEL=z1.BLOCK_M * z1.BLOCK_N,

@@ -1,11 +1,21 @@
-import math
 import torch
 
 # Constant for RELU^2 scaling
 RELU2_SCALE = 3 ** -0.5
 
+
+def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
+    """Return tile-grid dimensions and tile storage sizes for a dense matrix shape."""
+    TILE_NUMEL = BLOCK_M * BLOCK_N
+    TILE_BYTES = TILE_NUMEL // 8
+    grid_m = (M + BLOCK_M - 1) // BLOCK_M
+    grid_n = (N + BLOCK_N - 1) // BLOCK_N
+    num_tiles = grid_m * grid_n
+    return grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES
+
+
 def print_memory(msg):
-    memory = torch.cuda.max_memory_allocated("cuda")/1024**2
+    memory = torch.cuda.max_memory_allocated("cuda") / 1024 ** 2
     print(f'{msg}: {memory:.2f} MB')
 
 

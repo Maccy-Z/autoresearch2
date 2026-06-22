@@ -4,9 +4,9 @@ from torch import Tensor
 from forward_relu2 import RELU2_SCALE
 from backward_method import spAB, grad_z_sparse_inplace
 from sparse_kernels import (
-    _relu2_grad_with_sparse_kernel,
     _unpack_relu2_batch_kernel,
 )
+from shared.kernels import _relu2_grad_with_sparse_kernel
 
 from shared.utils import inplace_mm_
 

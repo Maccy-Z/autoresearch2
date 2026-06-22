@@ -8,7 +8,7 @@ from shared.experiment import FFNRelu2_2, FFNRelu2_3, gen_params, gen_params_3, 
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
 FFN_BLOCK_LAYERS = 3
-LAYERS = 3
+LAYERS = 2
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -33,19 +33,19 @@ class DeepFFN(nn.Module):
         if self.block_layers == 3:
             self.block_forward = FFNRelu2_3.apply
         elif self.block_layers == 2:
-            self.block_forward = FFNRelu2_2.apply # ffn_relu2#  #
+            self.block_forward = FFNRelu2_2.apply
         else:
             raise NotImplementedError
-    #     self.setup_hooks()
-    #
-    # @staticmethod
-    # def hook(w):
-    #     w.grad = None
-    #     return
-    #
-    # def setup_hooks(self):
-    #     for n, p in self.named_parameters():
-    #         p.register_post_accumulate_grad_hook(self.hook)
+        self.setup_hooks()
+
+    @staticmethod
+    def hook(w):
+        w.grad = None
+        return
+
+    def setup_hooks(self):
+        for n, p in self.named_parameters():
+            p.register_post_accumulate_grad_hook(self.hook)
 
     # @torch.compile
     def forward_base(self, x):
@@ -95,19 +95,21 @@ def evaluate():
     print(f"Total time: {avg_time:.2f} ms")
     print()
 
+    tracking = tracking * 1e3
+    tracking_dn = tracking_dn * 1e3
     if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-3):
         print("Predicted values are different.")
-        print(f"{tracking_dn = }")
-        print(f"{tracking = }")
-        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-3)
+    print(f"{tracking_dn = }")
+    print(f"{tracking = }")
+    torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-3)
 
-        assert vram < vram_dn * 0.88
+    assert vram < vram_dn * 0.88
 
 
 def run_base():
     """Configure PyTorch matmul/logging settings and run the benchmark."""
     torch.set_float32_matmul_precision("high")
-    torch.set_printoptions(precision=8)
+    torch.set_printoptions(linewidth=1000)
     torch.manual_seed(0)
     torch._logging.set_logs(graph_breaks=True)
     evaluate()

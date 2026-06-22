@@ -6,21 +6,12 @@ from torch.library import custom_op
 from backward_method import FFN_backward, FFN3_backward, FFN_backward_sparse
 from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
 from sparse_utils import BitsparseTensorBuffer, TensorBuffer
+from shared.utils import _tile_grid
 
 
 DEFAULT_BLOCK_M = 128
 DEFAULT_BLOCK_N = 128
 BACKWARD_IMPL = FFN_backward
-
-
-def _tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:
-    """Return tile-grid dimensions and tile storage sizes for a dense matrix shape."""
-    TILE_NUMEL = BLOCK_M * BLOCK_N
-    TILE_BYTES = TILE_NUMEL // 8
-    grid_m = (M + BLOCK_M - 1) // BLOCK_M
-    grid_n = (N + BLOCK_N - 1) // BLOCK_N
-    num_tiles = grid_m * grid_n
-    return grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES
 
 
 def _make_bitsparse(
