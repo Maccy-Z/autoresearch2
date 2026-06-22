@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
-import time
-import gc
 import torch._logging
 import math
 
 from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustomOp
-from shared.experiment import generate_parameters, generate_parameters_3, FFN, FFN_3
+from shared.experiment import generate_parameters, generate_parameters_3, FFN, FFN_3, run_step
 
 FFN_BLOCK_LAYERS = 3
 LAYERS = 4
@@ -77,42 +75,6 @@ class DeepFFN(nn.Module):
                 x_inner = x
                 x = x + FFNSparse3.apply(x_inner, W1, W2, W3, buffer)
         return x
-
-
-def run_step(x, model, buffer: TensorBuffer=None, sparse=False, steps=1):
-    """Run forward/backward steps and return peak allocated VRAM plus average step time."""
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats("cuda")
-
-    if buffer is not None:
-        buffer.init_buffer()
-    start = time.perf_counter()
-
-    for _ in range(steps):
-        model.zero_grad()
-        if sparse:
-            y = model.forward(x, buffer)
-        else:
-            y = model.forward_base(x)
-
-        loss = (y - x).pow(2).mean()
-        loss.backward()
-
-    torch.cuda.synchronize()
-    allocated = torch.cuda.max_memory_allocated("cuda") / 1024**2
-
-    end = time.perf_counter()
-    avg_time = (end - start) * 1000 / steps
-
-    # Track gradient to ensure correctness
-    tracking = [loss.detach().cpu()]
-    for i, (n, p) in enumerate(model.named_parameters()):
-        if p.grad is not None:
-            tracking.append(p.grad.std().cpu())
-    tracking = torch.stack(tracking) * 1e3
-    return tracking, allocated, avg_time
 
 
 def evaluate():

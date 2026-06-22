@@ -1,14 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import time
 import math
-import gc
 import torch._logging
 
 from forward_methods import TensorBuffer
 from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
-from shared.experiment import generate_parameters, generate_parameters_3, FFNRelu2_2, FFNRelu2_3
+from shared.experiment import generate_parameters, generate_parameters_3, FFNRelu2_2, FFNRelu2_3, run_step
 
 
 FFN_BLOCK_LAYERS = 3
@@ -72,38 +70,6 @@ class DeepFFN(nn.Module):
                 x_inner = x
                 x = FFNSparseRelu2_3.apply(x_inner, W1, W2, W3, buffer)
         return x
-
-
-def run_step(x, model, buffer: TensorBuffer = None, sparse=False, steps=1):
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats("cuda")
-
-    if buffer is not None:
-        buffer.init_buffer()
-    start = time.perf_counter()
-
-    for _ in range(steps):
-        torch.cuda.reset_peak_memory_stats("cuda")
-        model.zero_grad()
-        if sparse:
-            y = model.forward(x, buffer)
-        else:
-            y = model.forward_base(x)
-        loss = (y - x).pow(2).mean()
-        loss.backward()
-
-    torch.cuda.synchronize()
-    allocated = torch.cuda.max_memory_allocated("cuda") / 1024 ** 2
-    end = time.perf_counter()
-    avg_time = (end - start) * 1000 / steps
-    tracking = [loss.detach().cpu()]
-    for _, p in model.named_parameters():
-        if p.grad is not None:
-            tracking.append(p.grad.std().cpu())
-    tracking = torch.stack(tracking) * 1e3
-    return tracking, allocated, avg_time
 
 
 def make_sparse_buffer(bs, hdim, layers, block_layers):

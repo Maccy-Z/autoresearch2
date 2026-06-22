@@ -6,7 +6,7 @@ import gc
 import torch._logging
 
 from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
-from shared.experiment import FFNRelu2_2, FFNRelu2_3, generate_parameters, generate_parameters_3
+from shared.experiment import FFNRelu2_2, FFNRelu2_3, generate_parameters, generate_parameters_3, run_step
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
 FFN_BLOCK_LAYERS = 3
@@ -62,7 +62,7 @@ class DeepFFN(nn.Module):
                 x = self.block_forward(x_inner, W1, W2, W3)
         return x
 
-    def forward(self, x):
+    def forward(self, x, _=None):
         """Run the sparse-activation FFN on ``x[B, D]`` through all residual layers."""
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
@@ -73,36 +73,6 @@ class DeepFFN(nn.Module):
                 x_inner = x
                 x = FFNSparseRelu2_3.apply(x_inner, W1, W2, W3)
         return x
-
-
-def run_step(x, model, sparse=False, steps=1):
-    """Benchmark ``steps`` train iterations and return tracking stats, VRAM, and time."""
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats("cuda")
-
-    start = time.perf_counter()
-    for _ in range(steps):
-        model.zero_grad()
-        if sparse:
-            y = model.forward(x)
-        else:
-            y = model.forward_base(x)
-        loss = y.sum()
-        loss.backward()
-
-    torch.cuda.synchronize()
-    allocated = torch.cuda.max_memory_allocated("cuda") / 1024 ** 2
-    end = time.perf_counter()
-    avg_time = (end - start) * 1000 / steps
-
-    tracking = [loss.detach().cpu()]
-    for n, p in model.named_parameters():
-        if p.grad is not None:
-            tracking.append(p.grad.std().cpu())
-    tracking = torch.stack(tracking) #* 1e3
-    return tracking, allocated, avg_time
 
 
 def evaluate():

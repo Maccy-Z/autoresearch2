@@ -1,8 +1,45 @@
 from torch.autograd import Function
 import torch
 import math
+import time
+import gc
 
 from shared.utils import RELU2_SCALE
+
+
+# ------------------------------------------------------------------------------
+# Evaluation Loop
+# ------------------------------------------------------------------------------
+def run_step(x, model, buffer=None, sparse=False, steps=1):
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats("cuda")
+
+    if buffer is not None:
+        buffer.init_buffer()
+    start = time.perf_counter()
+
+    for _ in range(steps):
+        torch.cuda.reset_peak_memory_stats("cuda")
+        model.zero_grad()
+        if sparse:
+            y = model.forward(x, buffer)
+        else:
+            y = model.forward_base(x)
+        loss = y.sum()
+        loss.backward()
+
+    torch.cuda.synchronize()
+    allocated = torch.cuda.max_memory_allocated("cuda") / 1024 ** 2
+    end = time.perf_counter()
+    avg_time = (end - start) * 1000 / steps
+    tracking = [loss.detach().cpu()]
+    for _, p in model.named_parameters():
+        if p.grad is not None:
+            tracking.append(p.grad.std().cpu())
+    tracking = torch.stack(tracking) * 1e3
+    return tracking, allocated, avg_time
 
 # ------------------------------------------------------------------------------
 # Generate parameters
@@ -120,7 +157,7 @@ class FFNRelu2_3(Function):
 
         return grad_x, grad_W1, grad_W2, grad_W3
 
-#class FFN(Function):
+class FFN(Function):
     """Dense baseline autograd FFN for comparison.
 
     For ``x[B, D]``, ``W1[H, D]``, and ``W2[D, H]`` computes
