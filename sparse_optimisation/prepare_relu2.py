@@ -29,10 +29,12 @@ class FFNRelu2(Function):
         x, W1, W2, r = ctx.saved_tensors
         needs_x = ctx.needs_input_grad[0]
 
-        grad_z = grad_output @ W2
         z = r.square().mul_(RELU2_SCALE)
         grad_W2 = grad_output.T @ z
+        del z
+        grad_z = grad_output @ W2
         grad_preact = grad_z * (2.0 * RELU2_SCALE * r)
+        del grad_z
         if not torch.compiler.is_compiling():
             ctx.maybe_clear_saved_tensors()
 
@@ -174,6 +176,7 @@ def run_step(x, model, buffer: ValueBuffer = None, sparse=False, steps=1):
     start = time.perf_counter()
 
     for _ in range(steps):
+        torch.cuda.reset_peak_memory_stats("cuda")
         model.zero_grad()
         if sparse:
             y = model.forward(x, buffer)
@@ -195,7 +198,7 @@ def run_step(x, model, buffer: ValueBuffer = None, sparse=False, steps=1):
 
 
 def make_sparse_buffer(bs, hdim, layers, block_layers):
-    factor = 0.55 * (5 if block_layers == 3 else 1)
+    factor = 0.55 * (2 if block_layers == 3 else 1)
     return ValueBuffer(int(bs * math.floor(hdim * 5.25) * layers * factor), dtype=torch.bfloat16, device="cuda")
 
 
@@ -207,7 +210,7 @@ def evaluate():
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
 
-    model = DeepFFN(layers=layers, hidm=hdim, dtype=dtype, block_layers=3)
+    model = DeepFFN(layers=layers, hidm=hdim, dtype=dtype, block_layers=2)
     model._sparse_data = make_sparse_buffer(bs, hdim, layers, 3)
 
     run_step(x, model, sparse=False, steps=1)
@@ -215,37 +218,7 @@ def evaluate():
     print(f'Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms')
     print("-" * 50)
 
-    run_step(x, model, model._sparse_data, sparse=True, steps=1)
-    tracking, vram, avg_time = run_step(x, model, model._sparse_data, sparse=True, steps=3)
-    print(f"VRAM allocated by tensors: {vram:.2f} MB")
-    print(f'Total time: {avg_time:.2f} ms')
-
-    if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
-        print(f'Predicted values are different.')
-        print(f'{tracking_dn = }')
-        print(f'{tracking = }')
-        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
-
-    assert vram < vram_dn * 1.1
-
-
-def evaluate_3():
-    hdim = 4096
-    bs = 10_000
-    layers = 3
-    dtype = torch.bfloat16
-    G = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
-
-    model = DeepFFN(layers=layers, hidm=hdim, dtype=dtype, block_layers=3)
-    model._sparse_data = make_sparse_buffer(bs, hdim, layers, 3)
-
-    run_step(x, model, sparse=False, steps=1)
-    tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
-    print(f'Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms')
-    print("-" * 50)
-
-    run_step(x, model, model._sparse_data, sparse=True, steps=1)
+    # run_step(x, model, model._sparse_data, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, model._sparse_data, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')
