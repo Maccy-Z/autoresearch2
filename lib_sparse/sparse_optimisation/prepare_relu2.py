@@ -10,7 +10,7 @@ from shared.experiment import gen_params, gen_params_3, FFNRelu2_2, FFNRelu2_3, 
 
 
 FFN_BLOCK_LAYERS = 2
-LAYERS = 6
+LAYERS = 4
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -73,7 +73,7 @@ class DeepFFN(nn.Module):
 
 
 def make_sparse_buffer(bs, hdim, layers, block_layers):
-    factor = 0.55 * (2 if block_layers == 3 else 1)
+    factor = 0.55 * (block_layers-1)
     return TensorBuffer(int(bs * math.floor(hdim * 5.25) * layers * factor), dtype=torch.bfloat16, device="cuda")
 
 
@@ -83,7 +83,7 @@ def evaluate():
     x = torch.randn(BATCH_SIZE, DIM, dtype=dtype, device="cuda", generator=G, requires_grad=True)
 
     model = DeepFFN(layers=LAYERS, hidm=DIM, dtype=dtype, block_layers=FFN_BLOCK_LAYERS)
-    model._sparse_data = make_sparse_buffer(BATCH_SIZE, DIM, LAYERS, 3)
+    model._sparse_data = make_sparse_buffer(BATCH_SIZE, DIM, LAYERS, FFN_BLOCK_LAYERS)
 
     run_step(x, model, sparse=False, steps=1)
     tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
@@ -91,7 +91,6 @@ def evaluate():
     print("-" * 50)
 
     # run_step(x, model, model._sparse_data, sparse=True, steps=1)
-    run_step(x, model, model._sparse_data, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, model._sparse_data, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')

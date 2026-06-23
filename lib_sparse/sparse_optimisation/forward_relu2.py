@@ -2,7 +2,7 @@ from torch.autograd import Function
 
 from forward_methods import dense_to_tilesparse
 from shared.utils import RELU2_SCALE
-from backward_relu2 import FFN_relu2_backward, FFN_relu2_3_backward
+from shared.functions import FFN_relu2_3_backward, FFN_relu2_backward, FFN_relu2_backward_sparse
 
 
 class FFNSparseRelu2(Function):
@@ -11,15 +11,14 @@ class FFNSparseRelu2(Function):
         ctx.save_for_backward(x, W1, W2)
         preact = x @ W1.T
         preact.relu_()
-        z_sparse = dense_to_tilesparse(preact, sparse_data)
-        ctx.z_sparse = z_sparse
+        ctx.z_sparse = dense_to_tilesparse(preact, sparse_data)
         preact.square_()
         preact.mul_(RELU2_SCALE)
         return preact @ W2.T
 
     @staticmethod
     def backward(ctx, grad_output):
-        return FFN_relu2_backward(ctx, grad_output)
+        return FFN_relu2_backward_sparse(ctx, grad_output)
 
 
 class FFNSparseRelu2_3(Function):
