@@ -7,8 +7,8 @@ from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import FFNRelu2_2, FFNRelu2_3, gen_params, gen_params_3, run_step
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 3
-LAYERS = 2
+FFN_BLOCK_LAYERS = 2
+LAYERS = 6
 BATCH_SIZE = 10000
 DIM = 4096
 

@@ -2,10 +2,9 @@ import torch
 from torch import Tensor
 from torch.autograd import Function
 
-from backward_method import FFN_backward, FFN3_backward
-from sparse_kernels import _compact_vals_kernel, _tile_pack_kernel
-from sparse_utils import BitsparseTensor
-from shared.utils import _tile_grid
+from shared.functions import FFN3_backward, FFN_backward
+from shared.triton_operators import tile_pack, compact_vals
+from shared.utils import tile_grid, BitsparseTensor
 
 
 BLOCK_M = 128
@@ -19,18 +18,13 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
     ``vals = dense[mask]`` in row-major tile order.
     """
     M, N = dense.shape
-    grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = _tile_grid(M, N, BLOCK_M, BLOCK_N)
+    grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES = tile_grid(M, N, BLOCK_M, BLOCK_N)
 
     tile_counts = torch.empty(num_tiles, device=dense.device, dtype=torch.int32)
     tile_bitmasks = torch.empty(num_tiles * TILE_BYTES, device=dense.device, dtype=torch.uint8)
 
-    _tile_pack_kernel[(grid_m, grid_n)](
-        dense, tile_counts, tile_bitmasks,
-        M, N,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
-    )
+    tile_pack(dense, tile_counts, tile_bitmasks,
+              M, N, grid_m, grid_n, BLOCK_M, BLOCK_N, TILE_NUMEL, TILE_BYTES)
 
     tile_prefix = torch.empty(num_tiles + 1, device=dense.device, dtype=torch.int32)
     torch.cumsum(tile_counts, 0, out=tile_prefix[1:])
@@ -39,13 +33,8 @@ def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:
     total_nnz = tile_prefix[-1].item()
     vals = torch.empty(total_nnz, device=dense.device, dtype=dense.dtype)
 
-    _compact_vals_kernel[(num_tiles,)](
-        dense, tile_prefix, vals,
-        M, N, grid_n,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        TILE_NUMEL=TILE_NUMEL,
-        num_warps=16, num_stages=2,
-    )
+    compact_vals(dense, tile_prefix, vals, torch.tensor(0, device=dense.device, dtype=torch.int32),
+                 M, N, grid_n, num_tiles, BLOCK_M, BLOCK_N, TILE_NUMEL)
 
     return BitsparseTensor(vals, tile_bitmasks, tile_prefix,
                            grid_m, grid_n, BLOCK_M, BLOCK_N, dense.shape)

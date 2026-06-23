@@ -9,8 +9,8 @@ from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import gen_params, gen_params_3, FFNRelu2_2, FFNRelu2_3, run_step
 
 
-FFN_BLOCK_LAYERS = 3
-LAYERS = 2
+FFN_BLOCK_LAYERS = 2
+LAYERS = 6
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -91,6 +91,7 @@ def evaluate():
     print("-" * 50)
 
     # run_step(x, model, model._sparse_data, sparse=True, steps=1)
+    run_step(x, model, model._sparse_data, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, model._sparse_data, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')

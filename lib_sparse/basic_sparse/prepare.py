@@ -89,7 +89,7 @@ def evaluate():
     print(f"Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms")
     print("-" * 50)
 
-    # run_step(x, model, sparse=True, steps=1)
+    run_step(x, model, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f"Total time: {avg_time:.2f} ms")
