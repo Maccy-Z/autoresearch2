@@ -54,7 +54,22 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch: int = 2048) -> T
     return out
 
 
-def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
+def spAB(A_sparse: BitsparseTensor, B: Tensor) -> Tensor:
+    """Compute ``A_sparse @ B`` by unpacking the sparse matrix once.
+
+    Shapes: sparse ``A[M, N]`` and ``B[N, K]`` produce ``out[M, K]``.
+    """
+    vals = A_sparse.vals
+    grid_n = A_sparse.grid_n
+    M, N = A_sparse.shape
+
+    num_tiles = A_sparse.grid_m * grid_n
+    dense = torch.empty(M, N, device=B.device, dtype=vals.dtype)
+    unpack_batch(A_sparse, dense, 0, grid_n, N, M, num_tiles)
+    return dense @ B
+
+
+def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048, out: Tensor=None) -> Tensor:
     """Compute ``A_sparse @ B`` blockwise to reduce peak VRAM.
 
     Unpacks row batches of sparse ``A`` to dense, then multiplies by ``B``.
@@ -67,7 +82,8 @@ def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> T
     M, N = A_sparse.shape
     K = B.shape[1]
 
-    out = torch.empty(M, K, device=B.device, dtype=B.dtype)
+    if out is None:
+        out = torch.empty(M, K, device=B.device, dtype=B.dtype)
 
     for m_start in range(0, M, row_batch):
         m_end = min(m_start + row_batch, M)
@@ -126,6 +142,21 @@ def ATspRelu2B_block(A: Tensor, B_sparse: BitsparseTensor, row_batch: int = 512)
         out.addmm_(A[m_start:m_end, :].T, dense_batch)
 
     return out
+
+
+def ATspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
+    """Compute ``A.T @ B_sparse`` by unpacking the sparse matrix once.
+
+    Shapes: ``A[M, K]`` and sparse ``B[M, N]`` produce ``out[K, N]``.
+    """
+    vals = B_sparse.vals
+    grid_n = B_sparse.grid_n
+    M, N = B_sparse.shape
+
+    num_tiles = B_sparse.grid_m * grid_n
+    dense = torch.empty(M, N, device=A.device, dtype=vals.dtype)
+    unpack_batch(B_sparse, dense, 0, grid_n, N, M, num_tiles)
+    return A.T @ dense
 
 
 def ATspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch=2048) -> Tensor:

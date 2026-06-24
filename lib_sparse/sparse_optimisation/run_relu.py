@@ -7,7 +7,7 @@ from shared.experiment import run_step, DeepFFN_abc
 from shared.utils import setup_hooks, remove_hooks
 
 FFN_BLOCK_LAYERS = 2
-LAYERS = 1
+LAYERS = 12
 BATCH_SIZE = 10000
 DIM = 4096
 
