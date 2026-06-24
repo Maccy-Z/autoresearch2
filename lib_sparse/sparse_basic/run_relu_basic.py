@@ -5,15 +5,15 @@ from forward_methods import FFNSparse, FFNSparse3
 from shared.experiment import run_step, DeepFFN_abc
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 2
-LAYERS = 5
+FFN_BLOCK_LAYERS = 3
+LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096
 
 class DeepFFN(DeepFFN_abc):
     """Stack of residual FFN layers ``x <- x + FFN(x)`` for benchmarking."""
-    def __init__(self, dtype, layers=12, hdim=4096):
-        super().__init__(dtype, layers, hdim, FFN_BLOCK_LAYERS)
+    def __init__(self, dtype):
+        super().__init__(dtype, LAYERS, DIM, FFN_BLOCK_LAYERS)
 
     # @torch.compile
     def forward(self, x, _=None):
@@ -25,20 +25,17 @@ class DeepFFN(DeepFFN_abc):
         else:
             for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
                 x_inner = x
-                x = FFNSparse3.apply(x_inner, W1, W2, W3)
+                x = x + FFNSparse3.apply(x_inner, W1, W2, W3)
         return x
 
 
 def evaluate():
     """Compare dense and sparse FFN training for correctness, memory, and speed."""
-    hdim = DIM
-    bs = BATCH_SIZE
-    layers = LAYERS
     dtype = torch.bfloat16
     G = torch.Generator(device="cuda").manual_seed(0)
-    x = torch.randn(bs, hdim, dtype=dtype, device="cuda", generator=G, requires_grad=True)
+    x = torch.randn(BATCH_SIZE, DIM, dtype=dtype, device="cuda", generator=G, requires_grad=True)
 
-    model = DeepFFN(layers=layers, hdim=hdim, dtype=dtype)
+    model = DeepFFN(dtype=dtype)
 
     run_step(x, model, sparse=False, steps=1)
     tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
@@ -58,6 +55,7 @@ def evaluate():
         assert vram < vram_dn * 0.88
     print(f"{tracking_dn = }")
     print(f"{tracking = }")
+
 
 def run_base():
     """Configure PyTorch matmul/logging settings and run the benchmark."""

@@ -81,7 +81,7 @@ def unpack_relu2_batch(
     )
 
 
-def mask_with_bitmask(grad: Tensor, sparse: BitsparseTensor) -> None:
+def mask_with_bitmask_(grad: Tensor, sparse: BitsparseTensor) -> Tensor:
     """Apply the saved ReLU mask in-place: ``grad = grad * bitmask``."""
     BLOCK_M = sparse.BLOCK_M
     BLOCK_N = sparse.BLOCK_N
@@ -92,9 +92,10 @@ def mask_with_bitmask(grad: Tensor, sparse: BitsparseTensor) -> None:
         TILE_BYTES=BLOCK_M * BLOCK_N // 8,
         num_warps=4, num_stages=2,
     )
+    return grad
 
 
-def relu2_grad_sparse(grad: Tensor, sparse_z: BitsparseTensor) -> Tensor:
+def relu2_grad_sparse_(grad: Tensor, sparse_z: BitsparseTensor) -> Tensor:
     """Apply the ReLU² derivative in-place on ``grad`` using sparse ``z``.
 
     Computes `dpreact = grad * 2 * k * r` for active entries, where
@@ -139,7 +140,7 @@ def relu2_layer_grad(
 
 def relu_layer_sparse_(
     grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor, BLOCK_K: int = 32,
-) -> None:
+) -> BitsparseTensor:
     """ Relu backward layer, including linear and activation.
         Combine grad_z = grad_output @ W2,
                 grad_z = grad_z * (z>0)
@@ -161,3 +162,4 @@ def relu_layer_sparse_(
         num_warps=8, num_stages=3,
     )
 
+    return z_sparse

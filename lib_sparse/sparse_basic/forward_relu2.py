@@ -2,30 +2,31 @@ from torch.autograd import Function
 
 from forward_methods import dense_to_tilesparse
 from shared.utils import RELU2_SCALE
-from shared.functions import FFN_relu2_3_backward, FFN_relu2_backward_sparse, FFN_relu2_backward
+from shared.functions import FFN_relu2_3_backward, FFN_relu2_backward
 
 
 class FFNSparseRelu2(Function):
     """Autograd FFN using sparse storage for ReLU-squared hidden activation.
-
-    Forward formula for ``x[B, D]``, ``W1[H, D]``, ``W2[D, H]``:
-    ``z = k * relu(x @ W1.T)^2`` and ``y = z @ W2.T``, where
-    ``k = 1 / sqrt(3)`` matches the RMS of ReLU for standard-normal inputs.
+    Formula:
+        z = x @ W1.T
+        h = k * relu(z^2)
+        out = z @ W2.T
+        k = 1 / sqrt(3) matches the RMS of ReLU for standard-normal inputs.
     """
     @staticmethod
     def forward(ctx, x, W1, W2):
         """Compute FFN output and save pre-square ReLU values sparsely."""
         ctx.save_for_backward(x, W1, W2)
-        preact = x @ W1.T
-        preact.relu_()
-        ctx.z_sparse = dense_to_tilesparse(preact)
-        preact.square_()
-        preact.mul_(RELU2_SCALE)
-        return preact @ W2.T
+        z = x @ W1.T
+        h = z.relu_()
+        ctx.h_sparse = dense_to_tilesparse(h)
+        h.square_()
+        h.mul_(RELU2_SCALE)
+        return h @ W2.T
 
     @staticmethod
     def backward(ctx, grad_output):
-        return FFN_relu2_backward_sparse(ctx, grad_output)
+        return FFN_relu2_backward(ctx, grad_output)
 
 
 class FFNSparseRelu2_3(Function):
@@ -38,18 +39,18 @@ class FFNSparseRelu2_3(Function):
     def forward(ctx, x, W1, W2, W3):
         ctx.save_for_backward(x, W1, W2, W3)
         z1 = x @ W1.T
-        z1.relu_()
-        ctx.z1_sparse = dense_to_tilesparse(z1)
-        z1.square_()
-        z1.mul_(RELU2_SCALE)
+        h1 = z1.relu_()
+        ctx.h1_sparse = dense_to_tilesparse(h1)
+        h1_sq = z1.square_()
+        h1_sq.mul_(RELU2_SCALE)
 
-        z2 = z1 @ W2.T
-        z2.relu_()
-        ctx.z2_sparse = dense_to_tilesparse(z2)
-        z2.square_()
-        z2.mul_(RELU2_SCALE)
+        z2 = h1_sq @ W2.T
+        h2 = z2.relu_()
+        ctx.h2_sparse = dense_to_tilesparse(h2)
+        h2_sq = h2.square_()
+        h2_sq.mul_(RELU2_SCALE)
 
-        return z2 @ W3.T
+        return h2_sq @ W3.T
 
     @staticmethod
     def backward(ctx, grad_output):

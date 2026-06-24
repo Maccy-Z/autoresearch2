@@ -46,10 +46,10 @@ class FFNSparse(Function):
     def forward(ctx, x, W1, W2):
         """Compute FFN output and save ``z`` as a ``BitsparseTensor`` for backward."""
         ctx.save_for_backward(x, W1, W2)
-        preact = x @ W1.T
-        preact.relu_()
-        ctx.z_sparse = dense_to_tilesparse(preact)
-        return preact @ W2.T
+        z = x @ W1.T
+        h = z.relu_()
+        ctx.h_sparse = dense_to_tilesparse(h)
+        return h @ W2.T
 
     backward = staticmethod(FFN_backward)
 
@@ -60,12 +60,12 @@ class FFNSparse3(Function):
     def forward(ctx, x, W1, W2, W3):
         ctx.save_for_backward(x, W1, W2, W3)
         z1 = x @ W1.T
-        z1.relu_()
-        ctx.z1_sparse = dense_to_tilesparse(z1)
-        z2 = z1 @ W2.T
-        del z1
-        z2.relu_()
-        ctx.z2_sparse = dense_to_tilesparse(z2)
-        return z2 @ W3.T
+        h1 = z1.relu_()
+        ctx.h1_sparse = dense_to_tilesparse(h1)
+        z2 = h1 @ W2.T
+        del z1, h1
+        h2 = z2.relu_()
+        ctx.h2_sparse = dense_to_tilesparse(h2)
+        return h2 @ W3.T
 
     backward = staticmethod(FFN3_backward)

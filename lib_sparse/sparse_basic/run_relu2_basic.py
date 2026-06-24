@@ -6,8 +6,8 @@ from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import run_step, FFN_relu2_abc
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
-FFN_BLOCK_LAYERS = 2
-LAYERS = 4
+FFN_BLOCK_LAYERS = 3
+LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -24,8 +24,8 @@ class DeepFFN(FFN_relu2_abc):
                 x = x + FFNSparseRelu2.apply(x_inner, W1, W2)
         else:
             for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
-                x_inner = x
-                x = FFNSparseRelu2_3.apply(x_inner, W1, W2, W3)
+                x_inner = F.rms_norm(x, x.shape[1:])
+                x = x + FFNSparseRelu2_3.apply(x_inner, W1, W2, W3)
         return x
 
 
@@ -52,12 +52,11 @@ def evaluate():
 
     tracking = tracking * 1e3
     tracking_dn = tracking_dn * 1e3
-    if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-3):
-        print("Predicted values are different.")
-        assert vram < vram_dn * 0.88
-
     print(f"{tracking_dn = }")
     print(f"{tracking = }")
+    if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-3):
+        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
+        assert vram < vram_dn * 0.88
 
 
 def run_base():

@@ -6,8 +6,8 @@ from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustom
 from shared.experiment import run_step, DeepFFN_abc
 from shared.utils import setup_hooks, remove_hooks
 
-FFN_BLOCK_LAYERS = 2
-LAYERS = 8
+FFN_BLOCK_LAYERS = 3
+LAYERS = 3
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -56,7 +56,7 @@ def evaluate():
     buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
     buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
 
-    run_step(x, model, buffer, sparse=True, steps=1)
+    # run_step(x, model, buffer, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')
@@ -64,22 +64,19 @@ def evaluate():
     # Check correctness
     if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
         print(f'Predicted values are different.')
-
+        print(f'{tracking_dn = }')
+        print(f'{tracking = }')
         torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
 
         # Make sure vram usage is low enough
         assert vram < vram_dn * 0.95
-    print(f'{tracking_dn = }')
-    print(f'{tracking = }')
 
 
 def run_base():
     """Configure deterministic/debug settings and launch the benchmark."""
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
-    torch._logging.set_logs(
-        graph_breaks=True,
-    )
+    torch._logging.set_logs(graph_breaks=True)
 
     evaluate()
 

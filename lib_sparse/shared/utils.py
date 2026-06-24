@@ -93,7 +93,6 @@ def tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int
 def inplace_mm_(A, W, B=2048):
     """ A <- AW inplace operation. Done with batches. """
     m, n = A.shape
-    assert W.shape == (n, n)
 
     x = torch.empty((B, n), device=A.device, dtype=A.dtype)
     y = torch.empty_like(x)

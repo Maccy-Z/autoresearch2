@@ -54,7 +54,7 @@ def AspB_block(A: Tensor, B_sparse: BitsparseTensor, row_batch: int = 2048) -> T
     return out
 
 
-def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 20000) -> Tensor:
+def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 2048) -> Tensor:
     """Compute ``A_sparse @ B`` blockwise to reduce peak VRAM.
 
     Unpacks row batches of sparse ``A`` to dense, then multiplies by ``B``.
@@ -84,7 +84,7 @@ def spAB_block(A_sparse: BitsparseTensor, B: Tensor, row_batch: int = 20000) -> 
 
 
 def AspRelu2B(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
-    """Compute ``A @ (k * B^2)`` where sparse ``B`` stores ``relu(preact)``.
+    """Compute A @ (k * B^2) where sparse B = relu(preact), elementwise square for activation.
 
     Shapes: ``A[P, M]`` and sparse ``B[M, N]`` produce ``out[P, N]``.
     Unpacks ``k * B^2`` to dense before matmul.
@@ -100,8 +100,8 @@ def AspRelu2B(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     return A @ dense
 
 
-def AspRelu2B_block(A: Tensor, B_sparse: BitsparseTensor, row_batch: int = 512) -> Tensor:
-    """Compute ``A.T @ B_sparse`` by unpacking ReLU2 tiles in row batches.
+def ATspRelu2B_block(A: Tensor, B_sparse: BitsparseTensor, row_batch: int = 512) -> Tensor:
+    """Compute A.T @ (k * B^2) by unpacking ReLU2 tiles in row batches.
 
     Shapes: ``A[K, M]`` and sparse ``B[M, N]`` produce ``out[K, N]``.
     """

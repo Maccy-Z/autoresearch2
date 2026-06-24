@@ -103,11 +103,11 @@ class FFNSparse(Function):
     @staticmethod
     def forward(ctx, x, W1, W2, sparse_data):
         ctx.save_for_backward(x, W1, W2)
-        preact = x @ W1.T
-        preact.relu_()
-        z_sparse = dense_to_tilesparse(preact, sparse_data)
-        ctx.z_sparse = z_sparse
-        return preact @ W2.T
+        z = x @ W1.T
+        h = z.relu_()
+        h_sparse = dense_to_tilesparse(h, sparse_data)
+        ctx.h_sparse = h_sparse
+        return h @ W2.T
 
     backward = staticmethod(BACKWARD_IMPL)
 
@@ -118,13 +118,14 @@ class FFNSparse3(Function):
     def forward(ctx, x, W1, W2, W3, sparse_data):
         ctx.save_for_backward(x, W1, W2, W3)
         z1 = x @ W1.T
-        z1.relu_()
-        ctx.z1_sparse = dense_to_tilesparse(z1, sparse_data)
-        z2 = z1 @ W2.T
-        z2.relu_()
-        ctx.z2_sparse = dense_to_tilesparse(z2, sparse_data)
+        h1 = z1.relu_()
+        ctx.h1_sparse = dense_to_tilesparse(h1, sparse_data)
+        z2 = h1 @ W2.T
+        del z1, h1
+        h2 = z2.relu_()
+        ctx.h2_sparse = dense_to_tilesparse(h2, sparse_data)
 
-        return z2 @ W3.T
+        return h2 @ W3.T
 
     backward = staticmethod(FFN3_backward)
 
@@ -140,11 +141,11 @@ class FFNSparseCustomOp(Function):
         output, bitmask, prefix, vals_offset = ffn_sparse_forward_op(
             x, W1, W2, vals, offset
         )
-        z_sparse = _make_bitsparse(
+        h_sparse = _make_bitsparse(
             vals, bitmask, prefix, vals_offset,
             (x.shape[0], W1.shape[0]),
         )
-        ctx.z_sparse = z_sparse
+        ctx.h_sparse = h_sparse
         ctx.save_for_backward(x, W1, W2)
         return output
 
