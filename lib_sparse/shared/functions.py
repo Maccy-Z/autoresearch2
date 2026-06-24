@@ -6,6 +6,10 @@ from shared.sparse_operators import AspB, ATspB_block, AspRelu2B_block, AspRelu2
 from shared.utils import BitsparseTensor, inplace_mm_
 
 
+BLOCK_M = 128
+BLOCK_N = 128
+
+
 def FFN_backward(ctx, grad_output: Tensor):
     """Compute FFN gradients."""
     x, W1, W2 = ctx.saved_tensors

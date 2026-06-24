@@ -3,20 +3,19 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.library import custom_op
 
-from backward_method import FFN_backward, FFN3_backward, FFN_backward_sparse
 from shared.triton_operators import tile_pack, compact_vals
 from shared.utils import tile_grid, BitsparseTensor, TensorBuffer
+from shared.functions import FFN3_backward, FFN_backward, BLOCK_M, BLOCK_N
+from backward_method import FFN_backward_sparse
 
 
-DEFAULT_BLOCK_M = 128
-DEFAULT_BLOCK_N = 128
-BACKWARD_IMPL = FFN_backward
+BACKWARD_IMPL = FFN_backward_sparse
 
 
 def _make_bitsparse(
     vals: Tensor, bitmask: Tensor, prefix: Tensor,
     vals_offset: Tensor,
-    shape: tuple[int, int], BLOCK_M: int, BLOCK_N: int,
+    shape: tuple[int, int]
 ) -> BitsparseTensor:
     """Build a BitsparseTensor wrapper around packed values, bitmasks, and prefixes."""
     grid_m = (shape[0] + BLOCK_M - 1) // BLOCK_M
@@ -30,8 +29,6 @@ def _make_bitsparse(
 
 def _dense_to_tilesparse_pack_impl(
     dense: Tensor, vals: Tensor, offset: Tensor,
-    BLOCK_M: int = DEFAULT_BLOCK_M,
-    BLOCK_N: int = DEFAULT_BLOCK_N,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Pack a dense matrix into tile-sparse metadata and append values into the shared buffer."""
     M, N = dense.shape
@@ -59,27 +56,25 @@ def _dense_to_tilesparse_pack_impl(
 def dense_to_tilesparse(
     dense: Tensor,
     sparse_data: TensorBuffer,
-    BLOCK_M: int = DEFAULT_BLOCK_M,
-    BLOCK_N: int = DEFAULT_BLOCK_N,
 ) -> BitsparseTensor:
     """Convert a dense activation matrix into a BitsparseTensor backed by sparse_data."""
     vals, offset = sparse_data.vals, sparse_data.offset
     bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
-        dense, vals, offset, BLOCK_M, BLOCK_N
+        dense, vals, offset
     )
-    return _make_bitsparse(vals, bitmask, prefix, vals_offset, dense.shape, BLOCK_M, BLOCK_N)
+    return _make_bitsparse(vals, bitmask, prefix, vals_offset, dense.shape)
 
 
 @custom_op("bitsparse_forward_methods::ffn_sparse_forward", mutates_args={"vals", "offset"})
 def ffn_sparse_forward_op(
     x: Tensor, W1: Tensor, W2: Tensor, vals: Tensor,
-    offset: Tensor, BLOCK_M: int, BLOCK_N: int,
+    offset: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Run FFN forward and pack the ReLU activation into the sparse value buffer."""
     preact = x @ W1.T
     preact.relu_()
     bitmask, prefix, vals_offset = _dense_to_tilesparse_pack_impl(
-        preact, vals, offset, BLOCK_M, BLOCK_N
+        preact, vals, offset
     )
     output = preact @ W2.T
     return output, bitmask, prefix, vals_offset
@@ -88,7 +83,7 @@ def ffn_sparse_forward_op(
 @ffn_sparse_forward_op.register_fake
 def _(
     x: Tensor, W1: Tensor, W2: Tensor, vals: Tensor,
-    offset: Tensor, BLOCK_M: int,  BLOCK_N: int,
+    offset: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Return fake tensor outputs for tracing ffn_sparse_forward_op."""
     M = x.shape[0]
@@ -143,12 +138,11 @@ class FFNSparseCustomOp(Function):
     def forward(ctx, x, W1, W2, sparse_data: TensorBuffer):
         vals, offset = sparse_data.vals, sparse_data.offset
         output, bitmask, prefix, vals_offset = ffn_sparse_forward_op(
-            x, W1, W2, vals, offset, DEFAULT_BLOCK_M, DEFAULT_BLOCK_N
+            x, W1, W2, vals, offset
         )
         z_sparse = _make_bitsparse(
             vals, bitmask, prefix, vals_offset,
             (x.shape[0], W1.shape[0]),
-            DEFAULT_BLOCK_M, DEFAULT_BLOCK_N,
         )
         ctx.z_sparse = z_sparse
         ctx.save_for_backward(x, W1, W2)

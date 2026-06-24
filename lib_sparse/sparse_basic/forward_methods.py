@@ -2,13 +2,9 @@ import torch
 from torch import Tensor
 from torch.autograd import Function
 
-from shared.functions import FFN3_backward, FFN_backward
+from shared.functions import FFN3_backward, FFN_backward, BLOCK_M, BLOCK_N
 from shared.triton_operators import tile_pack, compact_vals
 from shared.utils import tile_grid, BitsparseTensor
-
-
-BLOCK_M = 128
-BLOCK_N = 128
 
 
 def dense_to_tilesparse(dense: Tensor) -> BitsparseTensor:

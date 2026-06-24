@@ -1,5 +1,7 @@
 from torch.autograd import Function
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import math
 import time
 import gc
@@ -34,11 +36,15 @@ def run_step(x, model, buffer=None, sparse=False, steps=1):
     allocated = torch.cuda.max_memory_allocated("cuda") / 1024 ** 2
     end = time.perf_counter()
     avg_time = (end - start) * 1000 / steps
-    tracking = [loss.detach().cpu()]
+
+    # Get gradients
+    tracking = [loss.detach().cpu(), x.grad.std().cpu()]
     for n, p in model.named_parameters():
         if p.grad is not None:
             tracking.append(p.grad.std().cpu())
     tracking = torch.stack(tracking) * 1e3
+    x.grad = None
+
     return tracking, allocated, avg_time
 
 # ------------------------------------------------------------------------------
@@ -243,3 +249,83 @@ class FFN_3(Function):
         grad_W1 = grad_z1.T @ x             # [H, D]
 
         return grad_x, grad_W1, grad_W2, grad_W3
+
+
+# ------------------------------------------------------------------------------
+# Sparse FFN base implementation
+# ------------------------------------------------------------------------------
+class DeepFFN_abc(nn.Module):
+    """Stack of residual FFN layers ``x <- x + FFN(x)`` for benchmarking."""
+
+    def __init__(self, dtype, layers, hdim, block_layers=2):
+        super().__init__()
+        G = torch.Generator(device="cuda").manual_seed(0)
+        self.block_layers = block_layers
+        self.W1s, self.W2s, self.W3s = nn.ParameterList(), nn.ParameterList(), nn.ParameterList()
+        for _ in range(layers):
+            if self.block_layers == 2:
+                W1, W2 = gen_params(hdim, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+            else:
+                W1, W2, W3 = gen_params_3(hdim, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+                self.W3s.append(nn.Parameter(W3))
+        if self.block_layers == 3:
+            self.block_forward = FFN_3.apply
+        elif self.block_layers == 2:
+            self.block_forward = FFN.apply
+        else:
+            raise NotImplementedError
+
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f'Model: {total_params = }, size={total_params * 2 // (1024 * 1024)} MB')
+
+    # @torch.compile
+    def forward_base(self, x):
+        """Run the dense baseline on ``x[B, D]`` through all residual layers."""
+        if self.block_layers == 2:
+            for W1, W2 in zip(self.W1s, self.W2s):
+                x_inner = x
+                x = x + self.block_forward(x_inner, W1, W2)
+        else:
+            for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
+                x_inner = x
+                x = self.block_forward(x_inner, W1, W2, W3)
+        return x
+
+
+class FFN_relu2_abc(nn.Module):
+    def __init__(self, dtype, layers=12, hidm=4096, block_layers=2):
+        super().__init__()
+        G = torch.Generator(device="cuda").manual_seed(0)
+        self.block_layers = block_layers
+        self.W1s, self.W2s, self.W3s = nn.ParameterList(), nn.ParameterList(), nn.ParameterList()
+        for _ in range(layers):
+            if self.block_layers == 2:
+                W1, W2 = gen_params(hidm, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+            else:
+                W1, W2, W3 = gen_params_3(hidm, G, dtype=dtype)
+                self.W1s.append(nn.Parameter(W1))
+                self.W2s.append(nn.Parameter(W2))
+                self.W3s.append(nn.Parameter(W3))
+        if self.block_layers == 3:
+            self.block_forward = FFNRelu2_3.apply
+        elif self.block_layers == 2:
+            self.block_forward = FFNRelu2_2.apply
+        else:
+            raise NotImplementedError
+
+    def forward_base(self, x):
+        if self.block_layers == 2:
+            for W1, W2 in zip(self.W1s, self.W2s):
+                x_inner = F.rms_norm(x, x.shape[1:])
+                x = x + self.block_forward(x_inner, W1, W2)
+        else:
+            for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
+                x_inner = x
+                x = self.block_forward(x_inner, W1, W2, W3)
+        return x

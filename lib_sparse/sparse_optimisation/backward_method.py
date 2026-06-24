@@ -3,27 +3,7 @@ from torch import Tensor
 
 from shared.triton_operators import relu_layer_sparse_
 from shared.sparse_operators import AspB, spAB_block, ATspB_block
-from shared.utils import BitsparseTensor, inplace_mm_
-from shared.functions import FFN3_backward, FFN_backward
-
-
-
-
-
-def grad_z_sparse_inplace_op(
-    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
-    BLOCK_K: int = 32,
-) -> BitsparseTensor:
-    """ Combine grad_z = grad_output @ W2,
-                grad_z = grad_z * (z>0)
-                grad_z = sparse(grad_z)
-        Overwrite z_sparse values.
-    """
-    relu_layer_sparse_(grad_output, W2, z_sparse, BLOCK_K)
-    return z_sparse
-
-
-
+from shared.utils import print_memory
 
 
 def FFN_backward_sparse(ctx, grad_output: Tensor):
