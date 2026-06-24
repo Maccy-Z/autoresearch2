@@ -9,7 +9,8 @@ from shared.functions import FFN3_backward, FFN_backward, BLOCK_M, BLOCK_N
 from backward_method import FFN_backward_sparse
 
 
-BACKWARD_IMPL = FFN_backward_sparse
+BACKWARD_IMPL = FFN_backward
+# BACKWARD_IMPL = FFN_backward_sparse
 
 
 def _make_bitsparse(

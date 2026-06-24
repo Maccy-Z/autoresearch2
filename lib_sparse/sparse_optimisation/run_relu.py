@@ -6,8 +6,8 @@ from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustom
 from shared.experiment import run_step, DeepFFN_abc
 from shared.utils import setup_hooks, remove_hooks
 
-FFN_BLOCK_LAYERS = 3
-LAYERS = 3
+FFN_BLOCK_LAYERS = 2
+LAYERS = 1
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -47,7 +47,7 @@ def evaluate():
     # Run baseline
     run_step(x, model, sparse=False, steps=1)
     tracking_dn, vram_dn, avg_time = run_step(x, model, sparse=False, steps=1)
-    print(f'Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms')
+    print(f'Baseline: {vram_dn = :.0f} MB, {avg_time=:.2f} ms')
     print("-"*50)
 
     # Setup sparse buffer and run model
@@ -56,9 +56,9 @@ def evaluate():
     buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
     buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
 
-    # run_step(x, model, buffer, sparse=True, steps=1)
-    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=1)
-    print(f"VRAM allocated by tensors: {vram:.2f} MB")
+    run_step(x, model, buffer, sparse=True, steps=1)
+    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=2)
+    print(f"VRAM allocated by tensors: {vram:.0f} MB")
     print(f'Total time: {avg_time:.2f} ms')
 
     # Check correctness

@@ -25,6 +25,7 @@ def run_step(x, model, buffer=None, sparse=False, steps=1):
     for _ in range(steps):
         torch.cuda.reset_peak_memory_stats("cuda")
         model.zero_grad()
+        x.grad = None
         if sparse:
             y = model.forward(x, buffer)
         else:
