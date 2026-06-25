@@ -3,10 +3,11 @@ import torch._logging
 
 from forward_methods import FFNSparse, FFNSparse3
 from shared.experiment import run_step, DeepFFN_abc
+from shared.utils import setup_hooks
 
 # Benchmark config: set to `2` or `3` for the inner FFN block depth.
 FFN_BLOCK_LAYERS = 3
-LAYERS = 3
+LAYERS = 6
 BATCH_SIZE = 10000
 DIM = 4096
 

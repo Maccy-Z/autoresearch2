@@ -6,8 +6,8 @@ from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustom
 from shared.experiment import run_step, DeepFFN_abc
 from shared.utils import setup_hooks, remove_hooks
 
-FFN_BLOCK_LAYERS = 2
-LAYERS = 12
+FFN_BLOCK_LAYERS = 3
+LAYERS = 2
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -52,12 +52,12 @@ def evaluate():
 
     # Setup sparse buffer and run model
     hdim_expanded = math.floor(DIM * 5.25)
-    buffer_scale = 0.55 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
+    buffer_scale = 0.6 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
     buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
     buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
 
-    run_step(x, model, buffer, sparse=True, steps=1)
-    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=2)
+    # run_step(x, model, buffer, sparse=True, steps=1)
+    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.0f} MB")
     print(f'Total time: {avg_time:.2f} ms')
 
