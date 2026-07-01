@@ -82,7 +82,7 @@ def unpack_relu2_batch(
 
 
 def mask_with_bitmask_(grad: Tensor, sparse: BitsparseTensor) -> Tensor:
-    """Apply the saved ReLU mask in-place: ``grad = grad * bitmask``."""
+    """Apply the saved ReLU mask in-place: ``grad <- grad * bitmask``."""
     BLOCK_M = sparse.BLOCK_M
     BLOCK_N = sparse.BLOCK_N
     _mask_with_bitmask_kernel[(sparse.grid_m, sparse.grid_n)](

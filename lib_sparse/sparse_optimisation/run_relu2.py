@@ -3,13 +3,12 @@ import torch.nn.functional as F
 import math
 import torch._logging
 
-from forward_methods import TensorBuffer
-from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
+from shared.nn import FFNRelu2, FFNRelu2_3, FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import run_step, FFN_relu2_abc
-from shared.utils import setup_hooks, remove_hooks
+from shared.utils import setup_hooks, remove_hooks, TensorBuffer
 
-FFN_BLOCK_LAYERS = 3
-LAYERS = 3
+FFN_BLOCK_LAYERS = 2
+LAYERS = 8
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -23,11 +22,15 @@ class DeepFFN(FFN_relu2_abc):
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
                 x_inner = F.rms_norm(x, x.shape[1:])
-                x = x + FFNSparseRelu2.apply(x_inner, W1, W2, buffer)
+                # x = x + FFNSparseRelu2.apply(x_inner, W1, W2, buffer)
+                x = x + FFNRelu2.apply(x_inner, W1, W2, buffer)
+
         else:
             for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
                 x_inner = F.rms_norm(x, x.shape[1:])
-                x = x + FFNSparseRelu2_3.apply(x_inner, W1, W2, W3, buffer)
+                # x = x + FFNSparseRelu2_3.apply(x_inner, W1, W2, W3, buffer)
+                x = x + FFNRelu2_3.apply(x_inner, W1, W2, W3, buffer)
+
         return x
 
 

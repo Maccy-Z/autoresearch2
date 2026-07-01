@@ -5,6 +5,8 @@ from cprint import c_print
 
 # Constant for RELU^2 scaling
 RELU2_SCALE = 3 ** -0.5
+BLOCK_M = 128
+BLOCK_N = 128
 
 
 class BitsparseTensor:
@@ -86,7 +88,6 @@ def tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int
     grid_n = (N + BLOCK_N - 1) // BLOCK_N
     num_tiles = grid_m * grid_n
     return grid_m, grid_n, num_tiles, TILE_NUMEL, TILE_BYTES
-
 
 
 @torch.no_grad()

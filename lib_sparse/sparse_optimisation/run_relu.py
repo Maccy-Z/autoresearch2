@@ -2,12 +2,14 @@ import torch
 import torch._logging
 import math
 
-from forward_methods import FFNSparse, FFNSparse3, TensorBuffer, FFNSparseCustomOp
+# from forward_methods import
+from shared.nn import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
+
 from shared.experiment import run_step, DeepFFN_abc
-from shared.utils import setup_hooks, remove_hooks
+from shared.utils import setup_hooks, remove_hooks, TensorBuffer
 
 FFN_BLOCK_LAYERS = 3
-LAYERS = 2
+LAYERS = 6
 BATCH_SIZE = 10000
 DIM = 4096
 
@@ -25,11 +27,14 @@ class DeepFFN(DeepFFN_abc):
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
                 x_inner = x
-                x = x + FFNSparse.apply(x_inner, W1, W2, buffer)
+                # x = x + FFNSparse.apply(x_inner, W1, W2, buffer)
+                x = x + FFNRelu.apply(x_inner, W1, W2, buffer)
         else:
             for W1, W2, W3 in zip(self.W1s, self.W2s, self.W3s):
                 x_inner = x
                 x = x + FFNSparse3.apply(x_inner, W1, W2, W3, buffer)
+                # x = x + FFNRelu_3.apply(x_inner, W1, W2, W3, buffer)
+
         return x
 
 
