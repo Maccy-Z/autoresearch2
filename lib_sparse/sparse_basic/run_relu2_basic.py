@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 import torch._logging
 
-# from forward_relu2 import FFNSparseRelu2, FFNSparseRelu2_3
 from shared.nn import FFNRelu2, FFNRelu2_3, FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import run_step, FFN_relu2_abc
 

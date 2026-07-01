@@ -111,7 +111,6 @@ def print_memory(msg):
     c_print(f'{msg}: {memory:.2f} MB', color="bright_cyan")
 
 
-
 def setup_hooks(model: nn.Module):
     """ Simulate hook optimiser that applies update + clears grads immediately."""
     def hook(w):
