@@ -4,8 +4,10 @@ import sys
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
+LIB_SPARSE_ROOT = os.path.join(PROJECT_ROOT, "lib_sparse")
+for path in (PROJECT_ROOT, LIB_SPARSE_ROOT):
+    if path not in sys.path:
+        sys.path.append(path)
 
 import torch
 from transformers import AutoTokenizer

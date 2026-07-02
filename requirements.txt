@@ -1,1 +1,4 @@
 git+https://github.com/Maccy-Z/c_print.git
+torch
+matplotlib
+transformers
