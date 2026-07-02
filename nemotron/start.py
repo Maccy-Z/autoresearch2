@@ -18,7 +18,7 @@ from llm import NemotronHForCausalLM
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 50
+MAX_TRAIN_TOKENS = 2460
 
 
 def hook(w):
@@ -171,7 +171,52 @@ Ron Ding in Hong Kong. Photographer: Paul Yeung/Bloomberg
 
 Ron Ding, a 26-year-old employee at a Hong Kong asset manager, invested HK$1 million ($127,604) of his own savings in the CSOP ETF in late April after becoming convinced SK Hynix would remain the dominant supplier of HBM chips for Nvidia.
 
-“I already have a car,” he said. “I can now afford a Patek Philippe Nautilus.”"""
+“I already have a car,” he said. “I can now afford a Patek Philippe Nautilus.”
+
+Wall Street is kicking off the second half of 2026 with fresh conviction: shrugging off one shock after another, markets are set to grind even higher.
+
+A diversified portfolio of stocks, bonds and commodities just posted its strongest first-half return since 2021 despite war in the Middle East, an oil price that doubled before collapsing and one of the sharpest swings in interest-rate expectations in years.
+
+If the first half was about survival, the second is about living with what survived. Richer valuations. Higher borrowing costs. A disruptive artificial-intelligence boom that continues to redraw markets. Across nearly every midyear outlook, Wall Street is betting markets can live with all three.
+
+The new quarter began with a reminder that investors won’t get a clean handoff. June payrolls showed that hiring cooled sharply even as the unemployment rate fell on shrinking labor-force participation, prompting traders to dial back expectations for a Federal Reserve rate increase.
+
+“Record earnings growth and AI-driven enthusiasm have pushed risk assets to new highs,” said Raphael Thuin, head of capital markets strategies at Tikehau Capital in Paris. “That said, H2 is unlikely to be a simple replay of H1. With parts of the AI ‘pick-and-shovel’ trade looking stretched, any shift in the narrative around compute demand could quickly reshape market leadership.”
+
+Read more: Chip Stocks Put Up Their Best Quarter Ever With Some Wild Swings
+
+Winners and Losers of an Extraordinary First Half
+Source: Bloomberg
+Note: Price changes are shown in local currencies. Returns reflect first-half performance beginning Dec. 31, 2025, except for the Kospi and Nikkei, which begin on Jan. 2 and Jan. 5, respectively.
+
+The optimism is visible in the scoreboard. Semiconductor stocks surged triple digits. The tech-heavy Nasdaq 100 posted a nearly 20% gain. Government bonds also delivered positive returns, despite markets swinging from expecting multiple Fed rate cuts to pricing another increase.
+
+Perhaps the biggest surprise was who didn’t lead. The Magnificent Seven, the defining trade of the past two years, lost about 2% on a total-return basis, trailing even UK government bonds as investors shifted toward the companies building AI rather than those deploying it. Gold, silver and Bitcoin all finished the first half lower despite months of geopolitical turmoil.
+
+Read more: Bitcoin Falls to 21-Month Low on Strategy, Rate-Hike Fears
+
+Most sell-side firms expect the economy to keep expanding, even if at a slower pace. JPMorgan Chase & Co. sees inventories turning higher, business confidence improving and AI spending broadening beyond hyperscale technology companies.
+
+“The global economy and financial markets have held together better than many expected,” wrote Stephen Dover and Larry Hatheway of Franklin Templeton Institute. “The outlook coalesces around a single organizing idea: resilience.”
+
+Markets Rally Across Asset Classes
+Source: Bloomberg
+Note: Data includes S&amp;P 500, Bloomberg US Treasury Total Return anf Bloomberg Commodity Index
+
+The caveat is that much of the good news may already be reflected in prices. Bloomberg’s Strategists’ S&P 500 Index Estimates for Year-End 2026 (Table) puts the average year-end target for the S&P 500 at 7,716 — implying a roughly 3% upside from June 30 levels. The benchmark has already climbed about 9% this year. In the holiday-shortened week, benchmark indexes eked out gains, with the S&P 500 up by 1.8% and the Nasdaq 100 rising 0.7%.
+
+Rather than simply buying the largest technology companies, BlackRock Inc., Invesco Ltd and others argue the AI trade is spreading into the physical economy, semiconductors, memory, power grids, data centers and industrial infrastructure. At the same time, higher bond yields are increasingly viewed as an opportunity rather than an obstacle, reviving income strategies in shorter-duration bonds and higher-quality credit.
+
+“We prefer earning income in short-term maturities, especially euro-area government bonds, over relying on long bonds with high duration or sensitivity to rate moves,” wrote the BlackRock Investment Institute team led by Jean Boivin. “We stay overweight US equities and focus on bottleneck opportunities to participate in AI growth.”
+
+The disagreements are more about degree than direction. JPMorgan warns resilient growth could keep inflation stubborn enough to force further tightening by central banks. Barclays Plc, meanwhile, argues the rally remains much narrower than headline indexes suggest and estimates that semiconductor and computer hardware companies generated around 87% of the S&P 500’s gains during the first half. The risks are familiar: another geopolitical shock, stickier inflation and US midterm elections now coming into view.
+
+“Your author has full faith that the second half of 2026 will be just as eventful as the first,” wrote Alexander Altmann of Barclays Equities Tactical Strategies. “To think that the past six months included three material geopolitical conflicts, the second-largest semiconductor rally in history, the sixth largest software selloff ever.”
+
+Even so, the common thread running through nearly every outlook is that the expansion remains intact. The bigger debate isn’t whether the first-half story continues but whether leadership broadens beyond the AI trade or whether the next winners simply become a different set of AI beneficiaries.
+
+“AI proved to be a calming effect to a world that faced both geopolitical and monetary policy uncertainty,” said Marvin Loh, senior macro strategist at State Street in Boston. “While there seems to be unlimited liquidity for the AI buildout, we can assure you that is not the case, which will likely test the availability and cost of capital in 2H.”
+"""
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
