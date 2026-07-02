@@ -7,8 +7,10 @@ from transformers import AutoTokenizer
 from utils import print_max_memory
 from llm import NemotronHForCausalLM
 
+# MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
-MAX_TRAIN_TOKENS = 1200
+
+MAX_TRAIN_TOKENS = 50
 
 
 def hook(w):
