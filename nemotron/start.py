@@ -14,6 +14,7 @@ MAX_TRAIN_TOKENS = 50
 
 
 def hook(w):
+    # print(w.grad)
     w.grad = None
     return
 

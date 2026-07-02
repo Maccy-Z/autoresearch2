@@ -4,10 +4,6 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "lib_sparse"))
-
 from llm import NemotronHForCausalLM
 
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
