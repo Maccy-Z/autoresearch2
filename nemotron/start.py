@@ -1,8 +1,6 @@
 import os
 import sys
-
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
-
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB_SPARSE_ROOT = os.path.join(PROJECT_ROOT, "lib_sparse")
 for path in (PROJECT_ROOT, LIB_SPARSE_ROOT):
@@ -11,6 +9,7 @@ for path in (PROJECT_ROOT, LIB_SPARSE_ROOT):
 
 import torch
 from transformers import AutoTokenizer
+import time
 
 from utils import print_max_memory
 from llm import NemotronHForCausalLM
@@ -18,43 +17,8 @@ from llm import NemotronHForCausalLM
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 2460
-
-
-def hook(w):
-    # print(w.grad)
-    w.grad = None
-    return
-
-
-def setup_hooks(model):
-    for n, p in model.named_parameters():
-        p.register_post_accumulate_grad_hook(hook)
-
-
-def calculate_loss(model: NemotronHForCausalLM, text, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS):
-    tokenizer_kwargs = {"return_tensors": "pt"}
-    if max_tokens is not None:
-        tokenizer_kwargs.update(
-            {
-                "max_length": max_tokens,
-                "truncation": True,
-            }
-        )
-
-    inputs = tokenizer(text, **tokenizer_kwargs).to(device)
-    print(f"{max_tokens = }")
-    print(f'{inputs["input_ids"].shape = }')
-    # For causal LM training, labels are usually the same token IDs as inputs.
-    # The model shifts them internally when computing next-token loss.
-    labels = inputs["input_ids"].clone()
-
-    outputs = model(**inputs, labels=labels, use_cache=False)
-    return outputs.loss
-
-
-def main():
-    prompt = """When Korea’s Kospi index plunged 10% last week and triggered a tech stock rout that quickly spread across the world, the country’s new-found status as a powerhouse in global markets was evident.
+MAX_TRAIN_TOKENS = 2500
+prompt = """When Korea’s Kospi index plunged 10% last week and triggered a tech stock rout that quickly spread across the world, the country’s new-found status as a powerhouse in global markets was evident.
 
 In large part, this is a manifestation of the crucial role South Korean chipmakers SK Hynix Inc. and Samsung Electronics Co. have come to play in the AI boom that’s powered markets higher. But the bout of frantic selling that day, which sank the Nasdaq 3%, also spotlighted something else: the emergence of a leveraged exchange-traded fund tied to SK Hynix that has grown so large, so fast, analysts say, that it is magnifying swings in both the stock and the entire Kospi index.
 
@@ -218,6 +182,41 @@ Even so, the common thread running through nearly every outlook is that the expa
 “AI proved to be a calming effect to a world that faced both geopolitical and monetary policy uncertainty,” said Marvin Loh, senior macro strategist at State Street in Boston. “While there seems to be unlimited liquidity for the AI buildout, we can assure you that is not the case, which will likely test the availability and cost of capital in 2H.”
 """
 
+
+def hook(w):
+    # print(w.grad)
+    w.grad = None
+    return
+
+
+def setup_hooks(model):
+    for n, p in model.named_parameters():
+        p.register_post_accumulate_grad_hook(hook)
+
+
+def calculate_loss(model: NemotronHForCausalLM, text, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS):
+    tokenizer_kwargs = {"return_tensors": "pt"}
+    if max_tokens is not None:
+        tokenizer_kwargs.update(
+            {
+                "max_length": max_tokens,
+                "truncation": True,
+            }
+        )
+
+    inputs = tokenizer(text, **tokenizer_kwargs).to(device)
+    print(f"{max_tokens = }")
+    print(f'{inputs["input_ids"].shape = }')
+    # For causal LM training, labels are usually the same token IDs as inputs.
+    # The model shifts them internally when computing next-token loss.
+    labels = inputs["input_ids"].clone()
+
+    outputs = model(**inputs, labels=labels, use_cache=False)
+    return outputs.loss
+
+
+def main():
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
@@ -238,6 +237,16 @@ Even so, the common thread running through nearly every outlook is that the expa
     loss.backward()
     print_max_memory("After backward pass")
 
+    # Timing
+    print("\nTiming Run")
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    st = time.perf_counter()
+    loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+    loss.backward()
+    torch.cuda.synchronize()
+    et = time.perf_counter()
+    print(f"Time taken for forward and backward pass: {et - st:.4f} seconds")
     # inputs = tokenizer(prompt, return_tensors="pt").to(device)
     #
     # with torch.inference_mode():
