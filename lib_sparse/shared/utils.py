@@ -4,7 +4,7 @@ from torch import Tensor
 from cprint import c_print
 
 # Constant for RELU^2 scaling
-RELU2_SCALE = 3 ** -0.5
+RELU2_SCALE = 1
 BLOCK_M = 128
 BLOCK_N = 128
 
