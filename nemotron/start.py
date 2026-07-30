@@ -17,7 +17,7 @@ from llm import NemotronHForCausalLM
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 2500
+MAX_TRAIN_TOKENS = 50
 prompt = """When Korea’s Kospi index plunged 10% last week and triggered a tech stock rout that quickly spread across the world, the country’s new-found status as a powerhouse in global markets was evident.
 
 In large part, this is a manifestation of the crucial role South Korean chipmakers SK Hynix Inc. and Samsung Electronics Co. have come to play in the AI boom that’s powered markets higher. But the bout of frantic selling that day, which sank the Nasdaq 3%, also spotlighted something else: the emergence of a leveraged exchange-traded fund tied to SK Hynix that has grown so large, so fast, analysts say, that it is magnifying swings in both the stock and the entire Kospi index.

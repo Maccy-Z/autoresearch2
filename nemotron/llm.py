@@ -775,17 +775,17 @@ class NemotronHMLP(nn.Module):
         self.act_fn = ACT2FN[config.mlp_hidden_act]
 
     def forward(self, x):
-        W1 = self.up_proj.weight
-        W2 = self.down_proj.weight
+        # W1 = self.up_proj.weight
+        # W2 = self.down_proj.weight
+        #
+        # x_shape = x.shape
+        # n = x.shape[-1]
+        # x = x.reshape(-1, n)
+        # out = FFNRelu2.apply(x, W1, W2)
+        # return out.reshape(x_shape)
 
-        x_shape = x.shape
-        n = x.shape[-1]
-        x = x.reshape(-1, n)
-        out = FFNRelu2.apply(x, W1, W2)
-        return out.reshape(x_shape)
-
-        # h = self.act_fn(self.up_proj(x))
-        # return self.down_proj(h)
+        h = self.act_fn(self.up_proj(x))
+        return self.down_proj(h)
 
 
 def rotate_half(x):
