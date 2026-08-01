@@ -18,8 +18,6 @@ def run_step(x, model, buffer=None, sparse=False, steps=1):
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats("cuda")
 
-    if buffer is not None:
-        buffer.init_buffer()
     start = time.perf_counter()
 
     for _ in range(steps):

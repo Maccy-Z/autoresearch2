@@ -20,7 +20,7 @@ from lib_sparse.shared.utils import TensorBuffer
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 1000
+MAX_TRAIN_TOKENS = 500
 with open("sample_text.txt", "r") as f:
     prompt = f.read()
 
@@ -65,9 +65,8 @@ def main():
     setup_hooks(model)
     model.train()
 
-    model.config.sparse_ffn = True
-    # sparse_data = TensorBuffer(40_000_000)
-    # sparse_data.init_buffer()
+    model.config.sparse_ffn = False
+    # sparse_data = TensorBuffer(60_000_000)
     sparse_data = None
     model.config.sparse_data = sparse_data
 

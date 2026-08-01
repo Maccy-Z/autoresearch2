@@ -60,8 +60,8 @@ class BitsparseTensor:
 
 
 class TensorBuffer:
-    vals: Tensor|None = None
-    offset: Tensor|None = None
+    vals: Tensor
+    offset: Tensor
 
     def __init__(self, size: int, device="cuda", dtype=torch.bfloat16):
         """ size: number of elements in buffer
@@ -71,14 +71,25 @@ class TensorBuffer:
         self.device = device
         self.dtype = dtype
 
-    def init_buffer(self):
-        if self.vals is None:
-            self.vals = torch.zeros(self.size, device=self.device, dtype=self.dtype)
-        self.reset_buffer()
+        # Init storage tensors
+        self.vals = torch.zeros(self.size, device=self.device, dtype=self.dtype)
+        self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
 
     def reset_buffer(self):
         """ Set offset tensor inside main training loop, since this needs to be consistent. """
         self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
+
+    def to_state(self):
+        """ Returns state in current buffer, decomposed into its objects for reloading. Useful for torch ops. """
+        return self.size, self.device, self.dtype, self.vals, self.offset
+
+    @staticmethod
+    def from_state(size, device, dtype, vals, offset) -> TensorBuffer:
+        """ Creates a TensorBuffer instance from its state. """
+        buffer = TensorBuffer(size, device, dtype)
+        buffer.vals = vals
+        buffer.offset = offset
+        return buffer
 
 
 def tile_grid(M: int, N: int, BLOCK_M: int, BLOCK_N: int) -> tuple[int, int, int, int, int]:

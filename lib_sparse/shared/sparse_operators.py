@@ -106,7 +106,6 @@ def AspRelu2B(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     Unpacks ``k * B^2`` to dense before matmul.
     """
     vals = B_sparse.vals
-    BLOCK_M, BLOCK_N = B_sparse.BLOCK_M, B_sparse.BLOCK_N
     grid_m, grid_n = B_sparse.grid_m, B_sparse.grid_n
     M, N = B_sparse.shape
 

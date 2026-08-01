@@ -67,6 +67,7 @@ class Relu2Linear(Function):
     """y = relu(Wx)."""
 
     @staticmethod
+    @torch.compiler.disable
     def forward(ctx, z, W, sparse_data:TensorBuffer|None):
         """ relu(Wx) layer. """
         ctx.save_for_backward(W)
