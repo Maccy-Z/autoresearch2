@@ -1,6 +1,6 @@
 from torch import Tensor
 
-from src.triton_kernels import (
+from src.code.triton_kernels import (
     _tile_pack_kernel,
     _compact_vals_kernel,
     _unpack_batch_kernel,

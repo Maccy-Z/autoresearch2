@@ -3,23 +3,29 @@ import torch.nn.functional as F
 import math
 import torch._logging
 
-from src.layers import FFNRelu2, FFNRelu2_3, FFNSparseRelu2, FFNSparseRelu2_3
-from src.experiment import run_step, FFN_relu2_abc
+from src.layers import FFNRelu2, FFNRelu2_3
+from experiments.experiment import run_step, FFN_relu2_abc
 from src.bitsparse import TensorBuffer
-from src.utils import setup_hooks, remove_hooks
+from src.utils import setup_hooks
 
 FFN_BLOCK_LAYERS = 2
-LAYERS = 8
+LAYERS = 16
 BATCH_SIZE = 10000
 DIM = 4096
+
+# Set to True to reproduce run_relu2_basic.py behaviour:
+# no pre-allocated TensorBuffer, no hooks, and a single timed step.
+BASIC_MODE = False
 
 
 class DeepFFN(FFN_relu2_abc):
     def __init__(self, dtype):
         super().__init__(dtype, LAYERS, DIM, FFN_BLOCK_LAYERS)
 
-    def forward(self, x, buffer):
-        buffer.reset_buffer()
+    def forward(self, x, buffer: TensorBuffer | None = None):
+        """Run the sparse-activation FFN on ``x[B, D]`` through all residual layers."""
+        if buffer is not None:
+            buffer.reset_buffer()
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
                 x_inner = F.rms_norm(x, x.shape[1:])
@@ -41,7 +47,8 @@ def evaluate():
     G = torch.Generator(device="cuda").manual_seed(0)
     x = torch.randn(BATCH_SIZE, DIM, dtype=dtype, device="cuda", generator=G, requires_grad=True)
     model = DeepFFN(dtype=dtype)
-    setup_hooks(model)
+    if not BASIC_MODE:
+        setup_hooks(model)
 
     # Run baseline
     run_step(x, model, sparse=False, steps=1)
@@ -49,14 +56,17 @@ def evaluate():
     print(f'Baseline: {vram_dn = :.2f} MB, {avg_time=:.2f} ms')
     print("-" * 50)
 
-    # Setup sparse buffer
-    hdim_expanded = math.floor(DIM * 5.25)
-    buffer_scale = 0.55 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
-    buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
-    buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
+    # Setup sparse buffer (in basic mode layers allocate on-the-fly)
+    buffer = None
+    if not BASIC_MODE:
+        hdim_expanded = math.floor(DIM * 5.25)
+        buffer_scale = 0.55 * (2 if FFN_BLOCK_LAYERS == 3 else 1)
+        buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
+        buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
+
     # Run sparse model
     run_step(x, model, buffer, sparse=True, steps=1)
-    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=3)
+    tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=3 if not BASIC_MODE else 1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')
 

@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 
-from src.triton_operators import unpack_batch_, unpack_relu2_batch_
+from src.code.triton_operators import unpack_batch_, unpack_relu2_batch_
 from src.bitsparse import BitsparseTensor
 
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:

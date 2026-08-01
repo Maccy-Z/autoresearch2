@@ -3,8 +3,8 @@ from torch import Tensor
 
 # Constant for RELU^2 scaling
 RELU2_SCALE = 1
-BLOCK_M = 32        # Rows per tile
-BLOCK_N = 32        # Columns per tile
+BLOCK_M = 64        # Rows per tile
+BLOCK_N = 64        # Columns per tile
 
 
 class BitsparseTensor:

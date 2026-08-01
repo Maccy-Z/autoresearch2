@@ -3,10 +3,9 @@ import torch
 from torch import Tensor
 from torch.autograd import Function
 
-from src.functions import (dense_to_tilesparse, FFN_backward, FFN3_backward, FFN_backward_sparse,
-                           FFN_relu2_3_backward, FFN_relu2_backward)
-from src.sparse_matmul import AspB, AspRelu2B
-from src.triton_operators import mask_with_bitmask_, relu2_grad_sparse_
+from src.code.functions import (dense_to_tilesparse, FFN_backward, FFN3_backward, FFN_relu2_3_backward, FFN_relu2_backward)
+from src.code.sparse_matmul import AspB, AspRelu2B
+from src.code.triton_operators import mask_with_bitmask_, relu2_grad_sparse_
 from src.bitsparse import BitsparseTensor, RELU2_SCALE
 if TYPE_CHECKING:
     from src.bitsparse import TensorBuffer
