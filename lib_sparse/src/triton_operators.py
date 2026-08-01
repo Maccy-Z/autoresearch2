@@ -1,6 +1,6 @@
 from torch import Tensor
 
-from shared.triton_kernels import (
+from src.triton_kernels import (
     _tile_pack_kernel,
     _compact_vals_kernel,
     _unpack_batch_kernel,
@@ -10,7 +10,7 @@ from shared.triton_kernels import (
     _relu2_layer_grad_kernel,
     _relu_layer_sparse_kernel,
 )
-from shared.bitsparse import RELU2_SCALE, BitsparseTensor
+from src.bitsparse import RELU2_SCALE, BitsparseTensor
 
 
 def tile_pack(

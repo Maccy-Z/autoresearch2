@@ -1,8 +1,8 @@
 import torch
 from torch import Tensor
 
-from shared.triton_operators import unpack_batch_, unpack_relu2_batch_
-from shared.bitsparse import BitsparseTensor
+from src.triton_operators import unpack_batch_, unpack_relu2_batch_
+from src.bitsparse import BitsparseTensor
 
 def AspB(A: Tensor, B_sparse: BitsparseTensor) -> Tensor:
     """Compute ``A @ B`` where ``B`` is stored as ``BitsparseTensor``.

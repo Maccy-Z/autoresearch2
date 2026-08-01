@@ -1,9 +1,9 @@
 import torch
 import torch._logging
 
-from shared.layers import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
-from shared.experiment import run_step, DeepFFN_abc
-from shared.utils import setup_hooks
+from src.layers import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
+from src.experiment import run_step, DeepFFN_abc
+from src.utils import setup_hooks
 
 FFN_BLOCK_LAYERS = 3
 LAYERS = 6

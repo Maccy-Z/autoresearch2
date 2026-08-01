@@ -1,15 +1,15 @@
 import torch
 from torch import Tensor
 
-from shared.triton_operators import (
+from src.triton_operators import (
     compact_vals,
     mask_with_bitmask_,
     relu2_grad_sparse_,
     relu2_layer_grad,
     tile_pack, relu_layer_sparse_
 )
-from shared.sparse_matmul import AspB, AspB_block, AspRelu2B_block, AspRelu2B, spAB_block
-from shared.bitsparse import BitsparseTensor, TensorBuffer, inplace_mm_, tile_grid, BLOCK_M, BLOCK_N
+from src.sparse_matmul import AspB, AspB_block, AspRelu2B_block, AspRelu2B, spAB_block
+from src.bitsparse import BitsparseTensor, TensorBuffer, inplace_mm_, tile_grid, BLOCK_M, BLOCK_N
 
 
 def dense_to_tilesparse(
