@@ -26,8 +26,8 @@ from huggingface_hub.dataclasses import strict
 
 from transformers.configuration_utils import PreTrainedConfig
 from transformers.utils import logging
-from lib_sparse.shared.nn import FFNRelu2
-
+from lib_sparse.shared.nn import FFNRelu2, FFNSparseRelu2
+from lib_sparse.shared.utils import TensorBuffer
 logger = logging.get_logger(__name__)
 
 
@@ -78,6 +78,10 @@ class NemotronHConfig(PreTrainedConfig):
     residual_in_fp32: bool = False
     hidden_dropout: float | int = 0.0
     rescale_prenorm_residual: bool = True
+
+    # Custom
+    sparse_ffn: bool = False
+    sparse_data: TensorBuffer | None = None
 
     def __post_init__(self, **kwargs):
         # Backward compatibility; configs expect different names for these fields when init
@@ -775,17 +779,15 @@ class NemotronHMLP(nn.Module):
         self.act_fn = ACT2FN[config.mlp_hidden_act]
 
     def forward(self, x):
-        # W1 = self.up_proj.weight
-        # W2 = self.down_proj.weight
-        #
-        # x_shape = x.shape
-        # n = x.shape[-1]
-        # x = x.reshape(-1, n)
-        # out = FFNRelu2.apply(x, W1, W2)
-        # return out.reshape(x_shape)
-
-        h = self.act_fn(self.up_proj(x))
-        return self.down_proj(h)
+        if self.config.sparse_ffn:
+            W1 = self.up_proj.weight
+            W2 = self.down_proj.weight
+            out = FFNRelu2.apply(x, W1, W2, sparse_data=self.config.sparse_data)
+            #out = FFNSparseRelu2.apply(x, W1, W2, self.config.sparse_data)
+            return out
+        else:
+            h = self.act_fn(self.up_proj(x))
+            return self.down_proj(h)
 
 
 def rotate_half(x):

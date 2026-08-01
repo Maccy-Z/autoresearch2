@@ -23,7 +23,7 @@ class DeepFFN(DeepFFN_abc):
     # @torch.compile
     def forward(self, x, buffer: TensorBuffer):
         """Run the residual FFN stack while allocating sparse storage for this pass."""
-        buffer.ready_buffer()
+        buffer.reset_buffer()
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
                 x_inner = x
@@ -67,11 +67,11 @@ def evaluate():
     print(f'Total time: {avg_time:.2f} ms')
 
     # Check correctness
-    if not torch.allclose(tracking, tracking_dn, atol=3e-4, rtol=3e-4):
+    if not torch.allclose(tracking, tracking_dn, atol=3e-6, rtol=3e-6):
         print(f'Predicted values are different.')
         print(f'{tracking_dn = }')
         print(f'{tracking = }')
-        torch.testing.assert_close(tracking, tracking_dn, atol=3e-4, rtol=3e-4)
+        torch.testing.assert_close(tracking, tracking_dn, atol=3e-6, rtol=3e-6)
 
         # Make sure vram usage is low enough
         assert vram < vram_dn * 0.95

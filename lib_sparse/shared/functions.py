@@ -128,7 +128,11 @@ def FFN3_backward(ctx, grad_output: Tensor):
 
 
 def FFN_relu2_backward(ctx, grad_output: Tensor):
-    """Backward for ``y = relu(x @ W1.T)^2 @ W2.T`` using sparse saved ``z``."""
+    """Backward for ``y = relu(x @ W1.T)^2 @ W2.T`` using sparse saved ``z``.
+        grad_output.shape = [*bs, in_dim]
+    """
+    bs_dims = grad_output.shape[:-1]          # [*bs, in_dim]
+    grad_output = grad_output.reshape(-1, grad_output.shape[-1])
     x, W1, W2 = ctx.saved_tensors
     h = ctx.h_sparse
     ctx.h_sparse = None
@@ -140,7 +144,11 @@ def FFN_relu2_backward(ctx, grad_output: Tensor):
     grad_z = relu2_grad_sparse_(grad_h2, h)
     del h
 
-    grad_x = grad_z @ W1 if needs_x else None
+    if needs_x:
+        grad_x = grad_z @ W1
+        grad_x = grad_x.reshape(*bs_dims, -1)
+    else:
+        grad_x = None
     grad_W1 = grad_z.T @ x
     return grad_x, grad_W1, grad_W2, None
 

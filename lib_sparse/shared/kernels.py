@@ -185,10 +185,10 @@ def _unpack_relu2_batch_kernel(
     base = tl.load(prefix_ptr + tile_id) + offset
     ranks = tl.cumsum(mask_bits, 0) - 1
     r = tl.load(vals_ptr + base + ranks, mask=(mask_bits == 1), other=0.0)
-    rdtype = r.dtype
-    r = r.to(tl.float32)
+    #rdtype = r.dtype
+    #r = r.to(tl.float32)
     z = RELU2_SCALE * r * r
-    z = z.to(rdtype)
+    #z = z.to(rdtype)
     z_2d = tl.reshape(z, (BLOCK_M, BLOCK_N))
 
     row_base = row_tile_in_batch * BLOCK_M
@@ -234,7 +234,8 @@ def _mask_with_bitmask_kernel(
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # _relu2_grad_sparse_kernel
-#   Computes:  grad = ∇f(z) = 2 * z * r, where z = k * r^2 and r = relu(a)
+#   Computes:  grad_preact = grad * 2 * k * r  (for active entries, r = relu(a) > 0)
+#   where z = k * r^2, so the derivative w.r.t. the preactivation is dz/da = 2*k*r.
 # ═══════════════════════════════════════════════════════════════════════════════
 @triton.jit
 def _relu2_grad_sparse_kernel(
@@ -244,7 +245,8 @@ def _relu2_grad_sparse_kernel(
     TILE_NUMEL: tl.constexpr, TILE_BYTES: tl.constexpr,
     RELU2_SCALE: tl.constexpr,
 ):
-    """Apply derivative for ``z = k * r^2`` from stored ``r = relu(a)``."""
+    """In-place: grad <- grad * dz/da, where dz/da = 2*k*r for r = relu(a) > 0,
+    else 0 (matching the stored bitmask)."""
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     grid_n = tl.num_programs(1)

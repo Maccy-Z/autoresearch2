@@ -18,7 +18,7 @@ class DeepFFN(FFN_relu2_abc):
         super().__init__(dtype, LAYERS, DIM, FFN_BLOCK_LAYERS)
 
     def forward(self, x, buffer):
-        buffer.ready_buffer()
+        buffer.reset_buffer()
         if self.block_layers == 2:
             for W1, W2 in zip(self.W1s, self.W2s):
                 x_inner = F.rms_norm(x, x.shape[1:])
@@ -70,8 +70,8 @@ def evaluate():
         assert vram < vram_dn * 1.1
 
 
-
 def run_base():
+    torch.set_printoptions(precision=10)
     torch.set_float32_matmul_precision("high")
     torch.manual_seed(0)
     torch._logging.set_logs(graph_breaks=True)

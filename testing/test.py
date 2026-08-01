@@ -67,7 +67,7 @@ def false_fn(x):
 def main():
     buffer =TensorBuffer(256*256, "cuda", torch.float16)
     buffer.init_buffer()
-    buffer.ready_buffer()
+    buffer.reset_buffer()
 
     x = torch.ones((250, 250), device="cuda", dtype=torch.float16)
 

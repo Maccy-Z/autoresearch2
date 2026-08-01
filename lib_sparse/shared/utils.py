@@ -5,8 +5,8 @@ from cprint import c_print
 
 # Constant for RELU^2 scaling
 RELU2_SCALE = 1
-BLOCK_M = 128
-BLOCK_N = 128
+BLOCK_M = 64        # Rows per tile
+BLOCK_N = 64        # Columns per tile
 
 
 class BitsparseTensor:
@@ -60,22 +60,23 @@ class BitsparseTensor:
 
 
 class TensorBuffer:
-    vals: Tensor = None
-    offset: Tensor = None
+    vals: Tensor|None = None
+    offset: Tensor|None = None
 
-    def __init__(self, size, device, dtype):
+    def __init__(self, size: int, device="cuda", dtype=torch.bfloat16):
+        """ size: number of elements in buffer
+            device: device of buffer
+            dtype: datatype of buffer"""
         self.size = size
         self.device = device
         self.dtype = dtype
 
     def init_buffer(self):
         if self.vals is None:
-            self.vals = torch.empty(self.size, device=self.device, dtype=self.dtype)
+            self.vals = torch.zeros(self.size, device=self.device, dtype=self.dtype)
+        self.reset_buffer()
 
-            c_print(f'Global buffer: {self.vals.nbytes / (1024 ** 2)}MB', color='green')
-            c_print(f'Maximum number of elements: {self.vals.numel()}', color='green')
-
-    def ready_buffer(self):
+    def reset_buffer(self):
         """ Set offset tensor inside main training loop, since this needs to be consistent. """
         self.offset = torch.zeros(1, device=self.device, dtype=torch.int32)
 
