@@ -66,9 +66,9 @@ def main():
     model.train()
 
     model.config.sparse_ffn = True
-    sparse_data = TensorBuffer(40_000_000)
-    sparse_data.init_buffer()
-    # sparse_data = None
+    # sparse_data = TensorBuffer(40_000_000)
+    # sparse_data.init_buffer()
+    sparse_data = None
     model.config.sparse_data = sparse_data
 
     # Warmup

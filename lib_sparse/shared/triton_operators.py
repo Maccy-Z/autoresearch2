@@ -5,7 +5,7 @@ from shared.kernels import (
     _compact_vals_kernel,
     _unpack_batch_kernel,
     _unpack_relu2_batch_kernel,
-    _mask_with_bitmask_kernel,
+    _relu_grad_sparse_kernel,
     _relu2_grad_sparse_kernel,
     _relu2_layer_grad_kernel,
     _relu_layer_sparse_kernel,
@@ -83,7 +83,7 @@ def mask_with_bitmask_(grad: Tensor, sparse: BitsparseTensor) -> Tensor:
     """Apply the saved ReLU mask in-place: ``grad <- grad * bitmask``."""
     BLOCK_M = sparse.BLOCK_M
     BLOCK_N = sparse.BLOCK_N
-    _mask_with_bitmask_kernel[(sparse.grid_m, sparse.grid_n)](
+    _relu_grad_sparse_kernel[(sparse.grid_m, sparse.grid_n)](
         grad, sparse.bitmask,
         sparse.shape[0], sparse.shape[1],
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,

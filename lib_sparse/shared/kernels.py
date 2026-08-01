@@ -236,12 +236,12 @@ def _unpack_relu2_batch_kernel(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# _mask_with_bitmask_kernel
-#   In-place masks a dense gradient matrix ∂L/∂Z using the stored bitmask.
-#   Computes:  ∂L/∂Z  ←  ∂L/∂Z  ⊙  (Z > 0)
+# _relu_grad_sparse_kernel
+#   Computes:  grad_preact = grad * (relu(a) > 0)
+#   In-place update on grad.
 # ═══════════════════════════════════════════════════════════════════════════════
 @triton.jit
-def _mask_with_bitmask_kernel(
+def _relu_grad_sparse_kernel(
     grad_ptr,           # input/output: dense gradient ∂L/∂Z ∈ R^{M×N} (in-place)
     bitmask_ptr,        # input:  uint8 packed bitmasks
     M, N,               # dimensions
@@ -273,6 +273,7 @@ def _mask_with_bitmask_kernel(
 # _relu2_grad_sparse_kernel
 #   Computes:  grad_preact = grad * 2 * k * r  (for active entries, r = relu(a) > 0)
 #   where z = k * r^2, so the derivative w.r.t. the preactivation is dz/da = 2*k*r.
+#   In-place update on grad.
 # ═══════════════════════════════════════════════════════════════════════════════
 @triton.jit
 def _relu2_grad_sparse_kernel(
