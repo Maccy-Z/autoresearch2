@@ -6,7 +6,7 @@ import torch._logging
 from src.layers import FFNRelu2, FFNRelu2_3
 from experiments.experiment import run_step, FFN_relu2_abc
 from src.bitsparse import TensorBuffer
-from src.utils import setup_hooks
+from experiments.utils import setup_hooks
 
 FFN_BLOCK_LAYERS = 2
 LAYERS = 16

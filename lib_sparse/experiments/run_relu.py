@@ -7,7 +7,7 @@ from src.layers import FFNRelu, FFNSparse3
 
 from experiments.experiment import run_step, DeepFFN_abc
 from src.bitsparse import TensorBuffer
-from src.utils import setup_hooks
+from experiments.utils import setup_hooks
 
 FFN_BLOCK_LAYERS = 2
 LAYERS = 6
