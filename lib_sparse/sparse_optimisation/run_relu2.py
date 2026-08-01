@@ -54,7 +54,7 @@ def evaluate():
     buffer_size = int(BATCH_SIZE * hdim_expanded * LAYERS * buffer_scale)
     buffer = TensorBuffer(buffer_size, dtype=dtype, device="cuda")
     # Run sparse model
-    # run_step(x, model, model._sparse_data, sparse=True, steps=1)
+    run_step(x, model, buffer, sparse=True, steps=1)
     tracking, vram, avg_time = run_step(x, model, buffer, sparse=True, steps=1)
     print(f"VRAM allocated by tensors: {vram:.2f} MB")
     print(f'Total time: {avg_time:.2f} ms')

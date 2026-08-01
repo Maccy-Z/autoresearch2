@@ -20,12 +20,48 @@ of shape [BLOCK_M × BLOCK_N].  Every tile is independently compressed:
 import triton
 import triton.language as tl
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Autotune configs for the hot kernels.
+#
+# Tuned kernels: _tile_pack_kernel, _compact_vals_kernel (run once per layer on
+# every forward pass) and the two tl.dot matmul kernels (where the inner-loop
+# tile BLOCK_K is a pure performance parameter).
+#
+# Left hardcoded: the memory-bound elementwise/gather kernels (unpack_*,
+# mask_with_bitmask, relu2_grad_sparse) whose hand-picked num_warps are
+# near-optimal; autotuning them would only add compile time.
+#
+# BLOCK_M/BLOCK_N/TILE_* are NOT tuned: they define the BitsparseTensor format
+# itself and every kernel operating on a tensor must agree on them.
+#
+# Config sets are deliberately small (3 each) and keyed only on shape dims so
+# each fixed layer shape benchmarks exactly once.
+# ═══════════════════════════════════════════════════════════════════════════════
+_PACK_CONFIGS = [
+    triton.Config({}, num_warps=2, num_stages=2),
+    triton.Config({}, num_warps=4, num_stages=2),
+    triton.Config({}, num_warps=8, num_stages=2),
+]
+
+_COMPACT_CONFIGS = [
+    triton.Config({}, num_warps=4, num_stages=2),
+    triton.Config({}, num_warps=8, num_stages=2),
+    triton.Config({}, num_warps=16, num_stages=2),
+]
+
+_MATMUL_CONFIGS = [
+    triton.Config({"BLOCK_K": 32}, num_warps=8, num_stages=2),
+    triton.Config({"BLOCK_K": 32}, num_warps=8, num_stages=3),  # previous hand-tuned
+    triton.Config({"BLOCK_K": 64}, num_warps=8, num_stages=2),
+    triton.Config({"BLOCK_K": 128}, num_warps=4, num_stages=3),
+]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # _tile_pack_kernel
 #   Computes:  bitmask[t] = pack(X_tile > 0)    ∀ tile t
 #              counts[t]  = ||X_tile > 0||₀     (number of positive entries)
 # ═══════════════════════════════════════════════════════════════════════════════
+@triton.autotune(configs=_PACK_CONFIGS, key=["M", "N"])
 @triton.jit
 def _tile_pack_kernel(
     dense_ptr,          # pointer to dense input X ∈ R^{M×N}
@@ -67,6 +103,7 @@ def _tile_pack_kernel(
 #     vals[prefix[t] : prefix[t+1]] = {X[p,q] : (p,q) ∈ tile t, X[p,q] > 0}
 #   Values within each tile are stored in row-major order.
 # ═══════════════════════════════════════════════════════════════════════════════
+@triton.autotune(configs=_COMPACT_CONFIGS, key=["M", "N"])
 @triton.jit
 def _compact_vals_kernel(
     dense_ptr,          # input:  dense X ∈ R^{M×N}
@@ -278,6 +315,7 @@ def _relu2_grad_sparse_kernel(
 # _relu2_layer_grad
 #   Computes sparse dpreact = (grad_output @ W2) * 2*k*r, writing into vals_out.
 # ═══════════════════════════════════════════════════════════════════════════════
+@triton.autotune(configs=_MATMUL_CONFIGS, key=["M", "N"])
 @triton.jit
 def _relu2_layer_grad_kernel(
     grad_output_ptr,
@@ -338,6 +376,7 @@ def _relu2_layer_grad_kernel(
 #   This fuses three operations into one kernel:
 #     grad_z = (∂L/∂Y @ W₂) ⊙ (Z > 0)   with output kept sparse.
 # ═══════════════════════════════════════════════════════════════════════════════
+@triton.autotune(configs=_MATMUL_CONFIGS, key=["M", "N"])
 @triton.jit
 def _relu_layer_sparse_kernel(
     grad_output_ptr,    # input:  ∂L/∂Y ∈ R^{M×D}

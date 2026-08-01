@@ -87,7 +87,7 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
 
     grad_W2 = AspB(grad_output.T, h)
     # Combine grad_output @ W2, relu + masking. Updates h inplace.
-    grad_z = relu_layer_sparse_(grad_output, W2, h, BLOCK_K=32)
+    grad_z = relu_layer_sparse_(grad_output, W2, h)
 
     grad_W1 = ATspB_block(x, grad_z).T
     if needs_x:
@@ -200,5 +200,4 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     del grad_z1
 
     return grad_x, grad_W1, grad_W2, grad_W3, None
-
 

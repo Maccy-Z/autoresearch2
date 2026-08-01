@@ -66,12 +66,13 @@ def main():
     model.train()
 
     model.config.sparse_ffn = True
-    # sparse_data = TensorBuffer(40_000_000)
-    # sparse_data.init_buffer()
-    sparse_data = None
+    sparse_data = TensorBuffer(40_000_000)
+    sparse_data.init_buffer()
+    # sparse_data = None
     model.config.sparse_data = sparse_data
 
     # Warmup
+    c_print("Starting Warmup", color="cyan")
     for _ in range(5):
         loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
         loss.backward()
@@ -80,7 +81,7 @@ def main():
             sparse_data.reset_buffer()
 
     # Timing
-    print("\nTiming Run")
+    c_print("Starting Timing Run", color="cyan")
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()

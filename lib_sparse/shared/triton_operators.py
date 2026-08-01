@@ -25,7 +25,6 @@ def tile_pack(
         M, N,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL, TILE_BYTES=TILE_BYTES,
-        num_warps=4, num_stages=2,
     )
 
 
@@ -40,7 +39,6 @@ def compact_vals(
         M, N, grid_n,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=TILE_NUMEL,
-        num_warps=16, num_stages=2,
     )
 
 
@@ -117,10 +115,12 @@ def relu2_grad_sparse_(grad: Tensor, sparse_z: BitsparseTensor) -> Tensor:
 
 
 def relu2_layer_grad(
-    grad_output: Tensor, W2: Tensor, r_sparse: BitsparseTensor, BLOCK_K: int = 64,
+    grad_output: Tensor, W2: Tensor, r_sparse: BitsparseTensor,
 ) -> None:
     """ Relu^2 backward layer, including linear and activation.
-    Overwrite r_sparse values with ``dpreact = (grad_output @ W2) * 2*k*r``."""
+    Overwrite r_sparse values with ``dpreact = (grad_output @ W2) * 2*k*r``.
+    BLOCK_K (inner-loop tile) is chosen by kernel autotune.
+    """
     M, N = r_sparse.shape
     BLOCK_M = r_sparse.BLOCK_M
     BLOCK_N = r_sparse.BLOCK_N
@@ -131,21 +131,20 @@ def relu2_layer_grad(
         M, N, r_sparse.grid_n,
         D=grad_output.shape[1],
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
         TILE_NUMEL=BLOCK_M * BLOCK_N, TILE_BYTES=BLOCK_M * BLOCK_N // 8,
         RELU2_SCALE=RELU2_SCALE,
-        num_warps=8, num_stages=2,
     )
 
 
 def relu_layer_sparse_(
-    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor, BLOCK_K: int = 32,
+    grad_output: Tensor, W2: Tensor, z_sparse: BitsparseTensor,
 ) -> BitsparseTensor:
     """ Relu backward layer, including linear and activation.
         Combine grad_z = grad_output @ W2,
                 grad_z = grad_z * (z>0)
                 grad_z = sparse(grad_z)
         Overwrite z_sparse values.
+        BLOCK_K (inner-loop tile) is chosen by kernel autotune.
     """
     M, N = z_sparse.shape
     BLOCK_M = z_sparse.BLOCK_M
@@ -157,9 +156,7 @@ def relu_layer_sparse_(
         M, N, z_sparse.grid_n,
         D=grad_output.shape[1],
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        BLOCK_K=BLOCK_K,
         TILE_NUMEL=BLOCK_M * BLOCK_N, TILE_BYTES=BLOCK_M * BLOCK_N // 8,
-        num_warps=8, num_stages=3,
     )
 
     return z_sparse
