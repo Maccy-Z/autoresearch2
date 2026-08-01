@@ -1,6 +1,6 @@
 from torch import Tensor
 
-from shared.kernels import (
+from shared.triton_kernels import (
     _tile_pack_kernel,
     _compact_vals_kernel,
     _unpack_batch_kernel,
@@ -10,7 +10,7 @@ from shared.kernels import (
     _relu2_layer_grad_kernel,
     _relu_layer_sparse_kernel,
 )
-from shared.utils import RELU2_SCALE, BitsparseTensor
+from shared.bitsparse import RELU2_SCALE, BitsparseTensor
 
 
 def tile_pack(
@@ -42,11 +42,11 @@ def compact_vals(
     )
 
 
-def unpack_batch(
+def unpack_batch_(
     sparse: BitsparseTensor, output: Tensor,
     first_m_tile: int, grid_n: int, K: int, batch_rows: int,
     num_tiles_in_batch: int,
-) -> None:
+) -> Tensor:
     """Unpack slice of sparse tiles into a dense output``batch_rows x K`` slice (in-place)."""
     BLOCK_M = sparse.BLOCK_M
     BLOCK_N = sparse.BLOCK_N
@@ -58,25 +58,27 @@ def unpack_batch(
         TILE_NUMEL=BLOCK_M * BLOCK_N, TILE_BYTES=BLOCK_M * BLOCK_N // 8,
         num_warps=8, num_stages=2,
     )
+    return output
 
 
-def unpack_relu2_batch(
-    sparse: BitsparseTensor, dense: Tensor,
+def unpack_relu2_batch_(
+    sparse: BitsparseTensor, output: Tensor,
     first_m_tile: int, grid_n: int, K: int, batch_rows: int,
     num_tiles_in_batch: int,
-) -> None:
+) -> Tensor:
     """Unpack stored ``r = relu(a)`` tiles as ``k * r²`` into dense (in-place)."""
     BLOCK_M = sparse.BLOCK_M
     BLOCK_N = sparse.BLOCK_N
     _unpack_relu2_batch_kernel[(num_tiles_in_batch,)](
         sparse.vals, sparse.bitmask, sparse.prefix, sparse.vals_offset,
-        dense,
+        output,
         first_m_tile, grid_n, K, batch_rows,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
         TILE_NUMEL=BLOCK_M * BLOCK_N, TILE_BYTES=BLOCK_M * BLOCK_N // 8,
         RELU2_SCALE=RELU2_SCALE,
         num_warps=8, num_stages=2,
     )
+    return output
 
 
 def mask_with_bitmask_(grad: Tensor, sparse: BitsparseTensor) -> Tensor:

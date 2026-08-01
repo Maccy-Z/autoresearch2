@@ -26,8 +26,8 @@ from huggingface_hub.dataclasses import strict
 
 from transformers.configuration_utils import PreTrainedConfig
 from transformers.utils import logging
-from lib_sparse.shared.nn import FFNRelu2, FFNSparseRelu2
-from lib_sparse.shared.utils import TensorBuffer
+from lib_sparse.shared.layers import FFNRelu2, FFNSparseRelu2
+from lib_sparse.shared.bitsparse import TensorBuffer
 logger = logging.get_logger(__name__)
 
 

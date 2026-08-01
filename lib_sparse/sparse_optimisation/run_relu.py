@@ -3,10 +3,11 @@ import torch._logging
 import math
 
 # from forward_methods import
-from shared.nn import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
+from shared.layers import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
 
 from shared.experiment import run_step, DeepFFN_abc
-from shared.utils import setup_hooks, remove_hooks, TensorBuffer
+from shared.bitsparse import TensorBuffer
+from shared.utils import setup_hooks, remove_hooks
 
 FFN_BLOCK_LAYERS = 3
 LAYERS = 6

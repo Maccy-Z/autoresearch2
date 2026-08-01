@@ -5,11 +5,11 @@ from torch.autograd import Function
 
 from shared.functions import (dense_to_tilesparse, FFN_backward, FFN3_backward, FFN_backward_sparse,
                               FFN_relu2_3_backward, FFN_relu2_backward)
-from shared.sparse_operators import AspB, AspRelu2B
+from shared.sparse_matmul import AspB, AspRelu2B
 from shared.triton_operators import mask_with_bitmask_, relu2_grad_sparse_
-from shared.utils import BitsparseTensor, RELU2_SCALE
+from shared.bitsparse import BitsparseTensor, RELU2_SCALE
 if TYPE_CHECKING:
-    from shared.utils import TensorBuffer
+    from shared.bitsparse import TensorBuffer
 
 # ------------------------------------------------------------
 # ReLU layers

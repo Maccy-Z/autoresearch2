@@ -15,7 +15,7 @@ from cprint import c_print
 
 from utils import print_max_memory
 from llm import NemotronHForCausalLM
-from lib_sparse.shared.utils import TensorBuffer
+from lib_sparse.shared.bitsparse import TensorBuffer
 
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"

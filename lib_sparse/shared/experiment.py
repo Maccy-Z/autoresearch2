@@ -6,7 +6,7 @@ import math
 import time
 import gc
 
-from shared.utils import RELU2_SCALE
+from shared.bitsparse import RELU2_SCALE
 
 
 # ------------------------------------------------------------------------------

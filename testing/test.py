@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 
 from shared.triton_operators import tile_pack, compact_vals
-from shared.utils import tile_grid, BitsparseTensor, TensorBuffer
+from shared.bitsparse import tile_grid, BitsparseTensor, TensorBuffer
 
 BLOCK_M, BLOCK_N = 128, 128
 

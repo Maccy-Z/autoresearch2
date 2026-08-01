@@ -1,7 +1,7 @@
 import torch
 import torch._logging
 
-from shared.nn import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
+from shared.layers import FFNRelu, FFNRelu_3, FFNSparse, FFNSparse3
 from shared.experiment import run_step, DeepFFN_abc
 from shared.utils import setup_hooks
 

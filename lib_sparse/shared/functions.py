@@ -8,8 +8,8 @@ from shared.triton_operators import (
     relu2_layer_grad,
     tile_pack, relu_layer_sparse_
 )
-from shared.sparse_operators import AspB, ATspB_block, ATspRelu2B_block, AspRelu2B, spAB_block
-from shared.utils import BitsparseTensor, TensorBuffer, inplace_mm_, tile_grid, BLOCK_M, BLOCK_N
+from shared.sparse_matmul import AspB, AspB_block, AspRelu2B_block, AspRelu2B, spAB_block
+from shared.bitsparse import BitsparseTensor, TensorBuffer, inplace_mm_, tile_grid, BLOCK_M, BLOCK_N
 
 
 def dense_to_tilesparse(
@@ -89,7 +89,7 @@ def FFN_backward_sparse(ctx, grad_output: Tensor):
     # Combine grad_output @ W2, relu + masking. Updates h inplace.
     grad_z = relu_layer_sparse_(grad_output, W2, h)
 
-    grad_W1 = ATspB_block(x, grad_z).T
+    grad_W1 = AspB_block(x.T, grad_z).T
     if needs_x:
         grad_x = spAB_block(grad_z, W1)
     else:
@@ -111,7 +111,7 @@ def FFN3_backward(ctx, grad_output: Tensor):
     grad_h2 = grad_output @ W3
     grad_z2 = mask_with_bitmask_(grad_h2, z2)
     del z2, grad_h2
-    grad_W2 = ATspB_block(grad_z2, h1)
+    grad_W2 = AspB_block(grad_z2.T, h1)
 
     # grad_z1 = grad_z2 @ W2
     # Semi inplace variant to reduce peak memory.
@@ -138,7 +138,7 @@ def FFN_relu2_backward(ctx, grad_output: Tensor):
     ctx.h_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W2 = AspRelu2B(grad_output.T, h) # ATspRelu2B_block(grad_output, z) #
+    grad_W2 = AspRelu2B(grad_output.T, h) # AspRelu2B_block(grad_output.T, z) #
 
     grad_h2 = grad_output @ W2
     grad_z = relu2_grad_sparse_(grad_h2, h)
@@ -160,12 +160,12 @@ def FFN_relu2_backward_sparse(ctx, grad_output: Tensor):
     ctx.z_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W2 = AspRelu2B(grad_output.T, z) # ATspRelu2B_block(grad_output, z) #
+    grad_W2 = AspRelu2B(grad_output.T, z) # AspRelu2B_block(grad_output.T, z) #
 
     relu2_layer_grad(grad_output, W2, z)
     grad_z = z
 
-    grad_W1 = ATspB_block(x, grad_z).T
+    grad_W1 = AspB_block(x.T, grad_z).T
     grad_x = spAB_block(grad_z, W1) if needs_x else None
 
     return grad_x, grad_W1, grad_W2, None
@@ -180,13 +180,13 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     ctx.h2_sparse = None
     needs_x = ctx.needs_input_grad[0]
 
-    grad_W3 = ATspRelu2B_block(grad_output, h2)
+    grad_W3 = AspRelu2B_block(grad_output.T, h2)
 
     grad_h2_sq = grad_output @ W3
     grad_z2 = relu2_grad_sparse_(grad_h2_sq, h2)
     del h2, grad_h2_sq
 
-    grad_W2 = ATspRelu2B_block(grad_z2, h1)
+    grad_W2 = AspRelu2B_block(grad_z2.T, h1)
 
     grad_h1_sq = inplace_mm_(grad_z2, W2)        # grad_z1 = grad_z2 @ W2
     del grad_z2
@@ -200,4 +200,3 @@ def FFN_relu2_3_backward(ctx, grad_output: Tensor):
     del grad_z1
 
     return grad_x, grad_W1, grad_W2, grad_W3, None
-

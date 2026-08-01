@@ -3,9 +3,10 @@ import torch.nn.functional as F
 import math
 import torch._logging
 
-from shared.nn import FFNRelu2, FFNRelu2_3, FFNSparseRelu2, FFNSparseRelu2_3
+from shared.layers import FFNRelu2, FFNRelu2_3, FFNSparseRelu2, FFNSparseRelu2_3
 from shared.experiment import run_step, FFN_relu2_abc
-from shared.utils import setup_hooks, remove_hooks, TensorBuffer
+from shared.bitsparse import TensorBuffer
+from shared.utils import setup_hooks, remove_hooks
 
 FFN_BLOCK_LAYERS = 2
 LAYERS = 8
