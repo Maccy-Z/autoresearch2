@@ -6,7 +6,7 @@ LIB_SPARSE_ROOT = os.path.join(PROJECT_ROOT, "lib_sparse")
 for path in (PROJECT_ROOT, LIB_SPARSE_ROOT):
     if path not in sys.path:
         sys.path.append(path)
-os.environ["TRITON_DEBUG"] = "1"
+# os.environ["TRITON_DEBUG"] = "1"
 
 import torch
 from transformers import AutoTokenizer
@@ -20,7 +20,7 @@ from lib_sparse.src.bitsparse import TensorBuffer
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 500
+MAX_TRAIN_TOKENS = 200
 with open("sample_text.txt", "r") as f:
     prompt = f.read()
 
@@ -72,28 +72,40 @@ def main():
 
     # Warmup
     c_print("Starting Warmup", color="cyan")
-    for _ in range(5):
+    for _ in range(3):
+        if sparse_data is not None:
+            sparse_data.reset_buffer()
         loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
         loss.backward()
         model.zero_grad()
-        if sparse_data is not None:
-            sparse_data.reset_buffer()
 
     # Timing
     c_print("Starting Timing Run", color="cyan")
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.empty_cache()
     torch.cuda.synchronize()
     st = time.perf_counter()
-    loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
-    # print_max_memory("After forward pass")
+    for _ in range(5):
+        if sparse_data is not None:
+            sparse_data.reset_buffer()
+        loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+        loss.backward()
 
+    torch.cuda.synchronize()
+    et = time.perf_counter()
+
+    print(f"Total Time: {(et - st)/5:.4f} seconds")
+
+    # Record memory usage
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    if sparse_data is not None:
+        sparse_data.reset_buffer()
+    loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+    torch.cuda.synchronize()
+    print_max_memory("After forward pass")
     loss.backward()
     torch.cuda.synchronize()
     print_max_memory("After backward pass")
-    et = time.perf_counter()
-
-    print(f"Total Time: {et - st:.4f} seconds")
 
     # Validation
     print("-"*50)
