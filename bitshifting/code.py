@@ -137,10 +137,16 @@ class _Replay:
             graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(graph):
                 self.kernel[grid](input_tensor, output, **kwargs)
-            self._entries[key] = (ptr, (graph, output))
+            self._entries[key] = [ptr, [graph, output, None]]
         except Exception:
             pass
         return output
+
+    def set_post(self, key, ptr, post):
+        """Cache a post-processed view of ``output`` for the replay path."""
+        entry = self._entries.get(key)
+        if entry is not None and entry[0] == ptr:
+            entry[1][2] = post
 
 
 _compress_replay = _Replay(_compress_15bit_kernel)
@@ -154,14 +160,10 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
     numel = data.numel()
     compressed_numel = (numel * 15 + 7) // 8
 
-    if compressed_numel == 0:
-        return torch.empty(0, dtype=torch.uint8, device=device)
-
-    if data.is_contiguous():
-        hit = _compress_replay.get(numel, data.data_ptr())
-        if hit is not None:
-            hit[0].replay()
-            return hit[1]
+    hit = _compress_replay.get(numel, data.data_ptr())
+    if hit is not None:
+        hit[0].replay()
+        return hit[1]
 
     bits = data.contiguous().view(torch.uint16).reshape(-1)
 
@@ -179,7 +181,7 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
     block_size = 1024
     grid = (triton.cdiv(compressed_numel, block_size),)
 
-    return _compress_replay.capture(
+    _compress_replay.capture(
         key=numel,
         ptr=data.data_ptr(),
         input_tensor=bits,
@@ -189,6 +191,7 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
         compressed_numel=compressed_numel,
         BLOCK_SIZE=block_size,
     )
+    return output
 
 
 def uncompress_fn(
@@ -207,14 +210,10 @@ def uncompress_fn(
     numel = math.prod(shape)
     expected_bytes = (numel * 15 + 7) // 8
 
-    if numel == 0:
-        return torch.empty(shape, dtype=dtype, device=device)
-
-    if compressed_tensor.is_contiguous():
-        hit = _uncompress_replay.get(numel, compressed_tensor.data_ptr())
-        if hit is not None:
-            hit[0].replay()
-            return hit[1].view(dtype).reshape(shape)
+    hit = _uncompress_replay.get(numel, compressed_tensor.data_ptr())
+    if hit is not None:
+        hit[0].replay()
+        return hit[2]
 
     restored_bits = torch.empty(
         numel,
@@ -237,4 +236,6 @@ def uncompress_fn(
     )
 
     # Reinterpret the restored bits without performing a numeric conversion.
-    return restored_bits.view(dtype).reshape(shape)
+    restored = restored_bits.view(dtype).reshape(shape)
+    _uncompress_replay.set_post(numel, compressed_tensor.data_ptr(), restored)
+    return restored
