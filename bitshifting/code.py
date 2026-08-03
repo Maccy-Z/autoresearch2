@@ -12,12 +12,22 @@ import triton.language as tl
 # Triton kernels
 # ---------------------------------------------------------------------------
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=8),
+        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
+    ],
+    key=['numel'],
+)
 @triton.jit
 def _compress_15bit_kernel(
     input_ptr,          # uint16 input
     output_ptr,         # uint8 output
-    numel: tl.constexpr,
-    compressed_numel: tl.constexpr,
+    numel,              # number of input values
+    compressed_numel,   # number of output bytes
     BLOCK_SIZE: tl.constexpr,
 ):
     """
@@ -59,12 +69,22 @@ def _compress_15bit_kernel(
     )
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=8),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=8),
+    ],
+    key=['numel'],
+)
 @triton.jit
 def _uncompress_15bit_kernel(
     input_ptr,          # uint16 input (compressed bytes viewed as uint16)
     output_ptr,         # uint16 output
-    numel: tl.constexpr,
-    compressed_numel: tl.constexpr,
+    numel,              # number of output values
+    compressed_numel,   # number of input bytes
     BLOCK_SIZE: tl.constexpr,
 ):
     # Process in reverse so the first blocks read the tail of the byte stream,
@@ -75,12 +95,8 @@ def _uncompress_15bit_kernel(
     )
     output_mask = output_offsets >= 0
 
-    bit_positions = output_offsets * 15
-
-    # A 15-bit value needs at most a 32-bit window that starts on an even byte.
-    # Loading two uint16s (4 aligned bytes) covers it with one mask.
     # k = 15*offs lands at bit k; window starts at bit 16*(k // 16).
-    k = bit_positions
+    k = output_offsets * 15
     idx16 = k // 16
     shift = k % 16
 
@@ -110,65 +126,10 @@ def _uncompress_15bit_kernel(
 # Public API
 # ---------------------------------------------------------------------------
 
-class _Replay:
-    """Replay a fixed-shape Triton launch through a captured CUDA graph.
-
-    The harness calls ``compress_fn`` / ``uncompress_fn`` over and over on the
-    same tensors.  Keying the replay on the input buffer pointer lets repeat
-    calls skip almost all host-side work (allocation, view creation, kernel
-    dispatch) and just re-run the captured kernel.
-    """
-
-    def __init__(self, kernel):
-        self.kernel = kernel
-        self._entries = {}
-
-    def get(self, key, ptr):
-        """Return the cached (graph, output) if ``ptr`` matches, else None."""
-        entry = self._entries.get(key)
-        if entry is not None and entry[0] == ptr:
-            return entry[1]
-        return None
-
-    def capture(self, key, ptr, input_tensor, output, grid, **kwargs):
-        """Launch directly; capture a replay graph only once per shape.
-
-        The graph is bound to specific buffers, so it is only useful when the
-        same pointer is passed again.  For other buffers of the same shape we
-        just launch directly rather than re-capturing a graph every call.
-        """
-        self.kernel[grid](input_tensor, output, **kwargs)
-        if key in self._entries:
-            return output
-        try:
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
-                self.kernel[grid](input_tensor, output, **kwargs)
-            self._entries[key] = [ptr, [graph, output, None]]
-        except Exception:
-            pass
-        return output
-
-    def set_post(self, key, ptr, post):
-        """Cache a post-processed view of ``output`` for the replay path."""
-        entry = self._entries.get(key)
-        if entry is not None and entry[0] == ptr:
-            entry[1][2] = post
-
-
-_compress_replay = _Replay(_compress_15bit_kernel)
-_uncompress_replay = _Replay(_uncompress_15bit_kernel)
-
-
 def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
     """Remove and bit-pack the sign bit from positive fp16/bf16 data."""
     numel = data.numel()
     compressed_numel = (numel * 15 + 7) // 8
-
-    hit = _compress_replay.get(numel, data.data_ptr())
-    if hit is not None:
-        hit[0].replay()
-        return hit[1]
 
     bits = data.contiguous().view(torch.uint16).reshape(-1)
 
@@ -183,19 +144,8 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
         device=device,
     )
 
-    block_size = 1024
-    grid = (triton.cdiv(compressed_numel, block_size),)
-
-    _compress_replay.capture(
-        key=numel,
-        ptr=data.data_ptr(),
-        input_tensor=bits,
-        output=output,
-        grid=grid,
-        numel=numel,
-        compressed_numel=compressed_numel,
-        BLOCK_SIZE=block_size,
-    )
+    grid = lambda meta: (triton.cdiv(compressed_numel, meta['BLOCK_SIZE']),)
+    _compress_15bit_kernel[grid](bits, output, numel, compressed_numel)
     return output
 
 
@@ -209,32 +159,19 @@ def uncompress_fn(
     numel = math.prod(shape)
     expected_bytes = (numel * 15 + 7) // 8
 
-    hit = _uncompress_replay.get(numel, compressed_tensor.data_ptr())
-    if hit is not None:
-        hit[0].replay()
-        return hit[2]
-
     restored_bits = torch.empty(
         numel,
         dtype=torch.uint16,
         device=device,
     )
 
-    block_size = 512
-    grid = (triton.cdiv(numel, block_size),)
-
-    _uncompress_replay.capture(
-        key=numel,
-        ptr=compressed_tensor.data_ptr(),
-        input_tensor=compressed_tensor.contiguous().reshape(-1).view(torch.uint16),
-        output=restored_bits,
-        grid=grid,
-        numel=numel,
-        compressed_numel=expected_bytes,
-        BLOCK_SIZE=block_size,
+    grid = lambda meta: (triton.cdiv(numel, meta['BLOCK_SIZE']),)
+    _uncompress_15bit_kernel[grid](
+        compressed_tensor.contiguous().reshape(-1).view(torch.uint16),
+        restored_bits,
+        numel,
+        expected_bytes,
     )
 
     # Reinterpret the restored bits without performing a numeric conversion.
-    restored = restored_bits.view(dtype).reshape(shape)
-    _uncompress_replay.set_post(numel, compressed_tensor.data_ptr(), restored)
-    return restored
+    return restored_bits.view(dtype).reshape(shape)
