@@ -1,4 +1,4 @@
 git+https://github.com/Maccy-Z/c_print.git
 torch
 matplotlib
-transformers
+transformers==5.12.0

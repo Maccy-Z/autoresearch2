@@ -6,7 +6,6 @@ LIB_SPARSE_ROOT = os.path.join(PROJECT_ROOT, "lib_sparse")
 for path in (PROJECT_ROOT, LIB_SPARSE_ROOT):
     if path not in sys.path:
         sys.path.append(path)
-# os.environ["TRITON_DEBUG"] = "1"
 
 import torch
 from transformers import AutoTokenizer
@@ -20,7 +19,7 @@ from lib_sparse.src.bitsparse import TensorBuffer
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 200
+MAX_TRAIN_TOKENS = 1100
 with open("sample_text.txt", "r") as f:
     prompt = f.read()
 
