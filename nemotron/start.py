@@ -19,7 +19,6 @@ from lib_sparse.src.bitsparse import TensorBuffer
 # MODEL_NAME = "nvidia/NVIDIA-Nemotron-Nano-9B-v2"
 MODEL_NAME = "nvidia/Nemotron-H-8B-Base-8K"
 
-MAX_TRAIN_TOKENS = 1100
 with open("sample_text.txt", "r") as f:
     prompt = f.read()
 
@@ -34,7 +33,7 @@ def setup_hooks(model):
         p.register_post_accumulate_grad_hook(hook)
 
 
-def calculate_loss(model: NemotronHForCausalLM, text, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS):
+def calculate_loss(model: NemotronHForCausalLM, text, tokenizer, device, max_tokens):
     tokenizer_kwargs = {"return_tensors": "pt"}
     if max_tokens is not None:
         tokenizer_kwargs.update(
@@ -54,27 +53,22 @@ def calculate_loss(model: NemotronHForCausalLM, text, tokenizer, device, max_tok
     return outputs.loss
 
 
-def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model: NemotronHForCausalLM = NemotronHForCausalLM.from_pretrained(
-        MODEL_NAME, dtype=dtype, trust_remote_code=True).to(device)
-    setup_hooks(model)
+def run_tests(model: NemotronHForCausalLM, tokenizer, device, train_tokens):
     model.train()
 
-    model.config.sparse_ffn = True
+    model.config.sparse_ffn = False
     # sparse_data = TensorBuffer(60_000_000)
     sparse_data = None
     model.config.sparse_data = sparse_data
+
+    c_print(f'{train_tokens=}, sparse={model.config.sparse_ffn}', color="bright_yellow")
 
     # Warmup
     c_print("Starting Warmup", color="cyan")
     for _ in range(3):
         if sparse_data is not None:
             sparse_data.reset_buffer()
-        loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+        loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=train_tokens)
         loss.backward()
         model.zero_grad()
 
@@ -85,13 +79,13 @@ def main():
     for _ in range(5):
         if sparse_data is not None:
             sparse_data.reset_buffer()
-        loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+        loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=train_tokens)
         loss.backward()
 
     torch.cuda.synchronize()
     et = time.perf_counter()
 
-    print(f"Total Time: {(et - st)/5:.4f} seconds")
+    print(f"Total Time: {1000 * (et - st) / 5:.4f} seconds")
 
     # Record memory usage
     torch.cuda.empty_cache()
@@ -99,7 +93,7 @@ def main():
     torch.cuda.reset_peak_memory_stats()
     if sparse_data is not None:
         sparse_data.reset_buffer()
-    loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=MAX_TRAIN_TOKENS)
+    loss = calculate_loss(model, prompt, tokenizer, device, max_tokens=train_tokens)
     torch.cuda.synchronize()
     print_max_memory("After forward pass")
     loss.backward()
@@ -107,13 +101,32 @@ def main():
     print_max_memory("After backward pass")
 
     # Validation
-    print("-"*50)
+    print("-" * 50)
     print(f'Loss: {loss.detach().cpu() = }')
 
     if sparse_data is not None:
         if sparse_data.offset > sparse_data.size:
-            c_print(f"Warning: Too many values detected, sparse_data.offset={sparse_data.offset.cpu().item()}, {sparse_data.size = }. "
-                    f"Results may be incorrect and the program may crash unexpectedly.", color="bright_red")
+            c_print(
+                f"Warning: Too many values detected, sparse_data.offset={sparse_data.offset.cpu().item()}, {sparse_data.size = }. "
+                f"Results may be incorrect and the program may crash unexpectedly.", color="bright_red")
+
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    torch.set_float32_matmul_precision("high")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model: NemotronHForCausalLM = NemotronHForCausalLM.from_pretrained(
+        MODEL_NAME, dtype=dtype, trust_remote_code=True).to(device)
+    setup_hooks(model)
+
+    token_sizes = [3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000] # [50, 100, 200, 300, 400, 500, 700, 900, 1100, 1300, 1500, 2000] #
+    for train_tokens in token_sizes:
+        run_tests(model, tokenizer, device, train_tokens)
+    # train_tokens = 500
+    # run_tests(model, tokenizer, device, train_tokens)
+
 
 if __name__ == "__main__":
     torch.set_printoptions(precision=6)

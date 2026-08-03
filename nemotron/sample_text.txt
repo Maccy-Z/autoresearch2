@@ -160,3 +160,198 @@ The disagreements are more about degree than direction. JPMorgan warns resilient
 Even so, the common thread running through nearly every outlook is that the expansion remains intact. The bigger debate isn’t whether the first-half story continues but whether leadership broadens beyond the AI trade or whether the next winners simply become a different set of AI beneficiaries.
 
 “AI proved to be a calming effect to a world that faced both geopolitical and monetary policy uncertainty,” said Marvin Loh, senior macro strategist at State Street in Boston. “While there seems to be unlimited liquidity for the AI buildout, we can assure you that is not the case, which will likely test the availability and cost of capital in 2H.”
+
+Stocks joined bonds higher as cooling tensions in the Middle East spurred a drop in oil prices, allaying worries about inflation.
+
+A revival in risk appetite, which was also fueled by solid earnings, drove the S&P 500 toward its highest since early June. Both small caps and megacaps climbed. Amazon.com Inc.’s value topped $3 trillion. US crude sank below $80. Treasury yields fell after last week’s intense volatility.
+
+
+Stocks climb as oil sinks. Source: Bloomberg
+
+
+Iran suggested negotiations to get more ships moving through the Strait of Hormuz are making progress, after President Donald Trump called off what he said was a major attack on the Islamic Republic.
+
+“The geopolitical landscape is once again setting the agenda for the macro outlook and providing solace for dip buyers,” said Ian Lyngen at BMO Capital Markets.
+
+Still, the on-again, off-again nature of US-Iran diplomacy could mean earnings and jobs data will have to do the heavy lifting for the bulls this week, according to Chris Larkin at E*Trade from Morgan Stanley.
+
+In the countdown to a slew of jobs figures, data showed US manufacturing activity expanded in July at the fastest pace in more than four years as demand remained strong, production surged and firms added workers.
+
+Oil Sinks on US-Iran Hopes
+Source: Nymex
+
+Labor-market data and earnings will determine whether stocks can build on last week’s resilience, according to Mark Hackett at Nationwide.
+
+“The market absorbed the Federal Reserve, earnings, inflation, and a significant rotation in leadership without breaking down,” he said. “After spending much of the summer in wait-and-see mode, the market may be laying the groundwork for its next breakout.”
+
+Momentum-style equity investing is poised to rebound from a sharp retreat as sectors with strong earnings replace chip stocks in leading gains, Morgan Stanley strategist Michael Wilson noted.
+
+After one of the “worst momentum selloffs in history,” Wilson said the style is rotating toward so-called quality shares with a stable earnings history.
+
+Corporate Highlights:
+
+AstraZeneca Plc has explored an acquisition of Bristol-Myers Squibb Co., according to people familiar with the matter, in a potential megadeal that would rank as the largest ever in pharma.
+Northrop Grumman Corp. has secured agreements worth as much as $3 billion to supply key components for missile interceptors produced by Lockheed Martin Corp., part of a broader effort to boost output of munitions drawn down by the Iran war.
+Marriott International Inc. said that room growth for 2026 would likely come in at the lower end of earlier guidance, driven by construction delays in the Middle East.
+AMC Shares Rally After Setting All-Time Weekend Record (2) generated its highest-ever total weekend revenue, driven by the opening of Spider-Man: Brand New Day.
+Tyson Foods Inc. cut its annual profit outlook, signaling that any relief for the US beef industry from a historic cattle shortage is still a long way off.
+
+WATCH: Mary Ann Bartels at Sanctuary Wealth on markets. Source: Bloomberg
+
+
+What Bloomberg strategists say... “Chairman Kevin Warsh’s limited guidance on the Fed’s reaction function means upcoming data, oil prices and the bond market will have a greater influence on the market’s expectations for the policy path.” — Michael Ball, Macro Strategist, Markets Live. For the full analysis, .
+
+Some of the main moves in markets:
+
+Stocks
+
+The S&P 500 rose 1.3% as of 12:20 p.m. New York time
+The Nasdaq 100 rose 1.6%
+The Dow Jones Industrial Average rose 1%
+The MSCI World Index rose 1%
+
+Currencies
+
+The Bloomberg Dollar Spot Index was little changed
+The euro fell 0.2% to $1.1506
+The British pound fell 0.4% to $1.3427
+The Japanese yen rose 0.3% to 156.87 per dollar
+
+Cryptocurrencies
+
+Bitcoin rose 0.6% to $63,791.25
+Ether fell 0.9% to $1,865.31
+
+Bonds
+
+The yield on 10-year Treasuries declined five basis points to 4.69%
+Germany’s 10-year yield declined five basis points to 3.15%
+Britain’s 10-year yield declined 10 basis points to 4.95%
+
+Commodities
+
+West Texas Intermediate crude fell 5.9% to $79.70 a barrel
+Spot gold fell 0.2% to $4,036.44 an ounce
+
+In the mathematical study of partial differential equations, Lewy's example is a celebrated example, due to Hans Lewy, of a linear partial differential equation with no solutions. It shows that the analog of the Cauchy–Kovalevskaya theorem does not hold in the smooth category.
+
+The original example is not explicit, since it employs the Hahn–Banach theorem, but there since have been various explicit examples of the same nature found by Howard Jacobowitz.[1]
+
+The Malgrange–Ehrenpreis theorem states (roughly) that linear partial differential equations with constant coefficients always have at least one solution; Lewy's example shows that this result cannot be extended to linear partial differential equations with polynomial coefficients.
+
+The example
+The statement is as follows
+
+On
+R
+×
+C
+{\displaystyle \mathbb {R} \times \mathbb {C} }, there exists a smooth (i.e.,
+C
+∞
+{\displaystyle C^{\infty }}) complex-valued function
+F
+(
+t
+,
+z
+)
+{\displaystyle F(t,z)} such that the differential equation
+∂
+u
+∂
+z
+¯
+−
+i
+z
+∂
+u
+∂
+t
+=
+F
+(
+t
+,
+z
+)
+{\displaystyle {\frac {\partial u}{\partial {\bar {z}}}}-iz{\frac {\partial u}{\partial t}}=F(t,z)}
+admits no solution on any open set. Note that if
+F
+{\displaystyle F} is analytic then the Cauchy–Kovalevskaya theorem implies there exists a solution.
+Lewy constructs this
+F
+{\displaystyle F} using the following result:
+
+On
+R
+×
+C
+{\displaystyle \mathbb {R} \times \mathbb {C} }, suppose that
+u
+(
+t
+,
+z
+)
+{\displaystyle u(t,z)} is a function satisfying, in a neighborhood of the origin,
+∂
+u
+∂
+z
+¯
+−
+i
+z
+∂
+u
+∂
+t
+=
+φ
+′
+(
+t
+)
+{\displaystyle {\frac {\partial u}{\partial {\bar {z}}}}-iz{\frac {\partial u}{\partial t}}=\varphi ^{\prime }(t)}
+for some C1 function φ. Then φ must be real-analytic in a (possibly smaller) neighborhood of the origin.
+This may be construed as a non-existence theorem by taking φ to be merely a smooth function. Lewy's example takes this latter equation and in a sense translates its non-solvability to every point of
+R
+×
+C
+{\displaystyle \mathbb {R} \times \mathbb {C} }. The method of proof uses a Baire category argument, so in a certain precise sense almost all equations of this form are unsolvable.
+
+Mizohata (1962) later found that the even simpler equation
+
+∂
+u
+∂
+x
++
+i
+x
+∂
+u
+∂
+y
+=
+F
+(
+x
+,
+y
+)
+{\displaystyle {\frac {\partial u}{\partial x}}+ix{\frac {\partial u}{\partial y}}=F(x,y)}
+depending on 2 real variables x and y sometimes has no solutions. This is almost the simplest possible partial differential operator with non-constant coefficients.
+
+Significance for CR manifolds
+A CR manifold comes equipped with a chain complex of differential operators, formally similar to the Dolbeault complex on a complex manifold, called the
+∂
+¯
+b
+{\displaystyle \scriptstyle {\bar {\partial }}_{b}}-complex. The Dolbeault complex admits a version of the Poincaré lemma. In the language of sheaves, this means that the Dolbeault complex is exact. The Lewy example, however, shows that the
+∂
+¯
+b
+{\displaystyle \scriptstyle {\bar {\partial }}_{b}}-complex is almost never exact.
