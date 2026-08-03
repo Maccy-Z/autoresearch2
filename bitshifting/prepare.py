@@ -14,8 +14,8 @@ def run_batch(data: Tensor, dtype, device):
 
     uncompressed = uncompress_fn(compressed, data.shape, dtype, device)
 
-    # Check correctness
-    assert torch.all(torch.eq(uncompressed, data)), "Data correctness check failed."
+    return uncompressed
+
 
 def main():
     dtype = torch.bfloat16
@@ -24,7 +24,7 @@ def main():
 
     sizes = [3**i for i in range(12, 17)] # From 16K to 49M
     print(sizes)
-    iters = 50
+    iters = 100
 
     tot_times = 0
     for n in sizes:
@@ -37,14 +37,18 @@ def main():
         torch.cuda.synchronize()
         st = time.perf_counter()
         for i in range(iters):
-            run_batch(data, dtype, device)
+            uncompressed = run_batch(data, dtype, device)
         torch.cuda.synchronize()
         end = time.perf_counter()
+
+        # Check correctness
+        assert torch.all(torch.eq(uncompressed, data)), "Data correctness check failed."
 
         avg_time = 1000*(end - st)/iters
         tot_times += avg_time
         print(f'{n=}, Time: {avg_time:.3g}ms')
 
+    print("Passed")
     print(f'Total time: {tot_times:.3g}ms')
 
 
