@@ -24,7 +24,9 @@ def main():
 
     sizes = [3**i for i in range(12, 17)] # From 16K to 49M
     print(sizes)
-    iters = 15
+    iters = 50
+
+    tot_times = 0
     for n in sizes:
         data = generate_data(n, G, dtype, device)
 
@@ -40,8 +42,11 @@ def main():
         end = time.perf_counter()
 
         avg_time = 1000*(end - st)/iters
-
+        tot_times += avg_time
         print(f'{n=}, Time: {avg_time:.3g}ms')
+
+    print(f'Total time: {tot_times:.3g}ms')
+
 
 if __name__ == '__main__':
     main()
