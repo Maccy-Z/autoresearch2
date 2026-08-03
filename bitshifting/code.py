@@ -131,8 +131,15 @@ class _Replay:
         return None
 
     def capture(self, key, ptr, input_tensor, output, grid, **kwargs):
-        """Launch directly and, where possible, capture a graph for replay."""
+        """Launch directly; capture a replay graph only once per shape.
+
+        The graph is bound to specific buffers, so it is only useful when the
+        same pointer is passed again.  For other buffers of the same shape we
+        just launch directly rather than re-capturing a graph every call.
+        """
         self.kernel[grid](input_tensor, output, **kwargs)
+        if key in self._entries:
+            return output
         try:
             graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(graph):
