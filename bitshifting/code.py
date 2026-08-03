@@ -67,13 +67,11 @@ def _uncompress_15bit_kernel(
     compressed_numel: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Process in reverse so the first blocks read the tail of the byte stream,
-    # which compress_fn wrote most recently and is still resident in L2.
     output_offsets = (
-        numel - 1
-        - (tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE))
+        tl.program_id(axis=0) * BLOCK_SIZE
+        + tl.arange(0, BLOCK_SIZE)
     )
-    output_mask = output_offsets >= 0
+    output_mask = output_offsets < numel
 
     bit_positions = output_offsets * 15
     byte_indices = bit_positions // 8
