@@ -76,13 +76,13 @@ def _uncompress_15bit_kernel(
     output_mask = output_offsets >= 0
 
     bit_positions = output_offsets * 15
-    byte_indices = bit_positions // 8
-    bit_offsets = bit_positions % 8
 
     # A 15-bit value needs at most a 32-bit window that starts on an even byte.
     # Loading two uint16s (4 aligned bytes) covers it with one mask.
-    idx16 = byte_indices // 2
-    lo_shift = (byte_indices % 2) * 8
+    # k = 15*offs lands at bit k; window starts at bit 16*(k // 16).
+    k = bit_positions
+    idx16 = k // 16
+    shift = k % 16
 
     u0 = tl.load(
         input_ptr + idx16,
@@ -97,7 +97,7 @@ def _uncompress_15bit_kernel(
     ).to(tl.uint32)
 
     window = u0 | (u1 << 16)
-    restored = (window >> (lo_shift + bit_offsets)) & 0x7FFF
+    restored = (window >> shift) & 0x7FFF
 
     tl.store(
         output_ptr + output_offsets,
