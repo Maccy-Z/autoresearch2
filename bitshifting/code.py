@@ -61,7 +61,7 @@ def _compress_15bit_kernel(
 
 @triton.jit
 def _uncompress_15bit_kernel(
-    input_ptr,          # uint8 input
+    input_ptr,          # uint16 input (compressed bytes viewed as uint16)
     output_ptr,         # uint16 output
     numel: tl.constexpr,
     compressed_numel: tl.constexpr,
@@ -77,27 +77,25 @@ def _uncompress_15bit_kernel(
     byte_indices = bit_positions // 8
     bit_offsets = bit_positions % 8
 
-    # A 15-bit value can span at most three bytes.
-    byte0 = tl.load(
-        input_ptr + byte_indices,
-        mask=output_mask & (byte_indices < compressed_numel),
+    # A 15-bit value needs at most a 32-bit window that starts on an even byte.
+    # Loading two uint16s (4 aligned bytes) covers it with one mask.
+    idx16 = byte_indices // 2
+    lo_shift = (byte_indices % 2) * 8
+
+    u0 = tl.load(
+        input_ptr + idx16,
+        mask=output_mask,
         other=0,
     ).to(tl.uint32)
 
-    byte1 = tl.load(
-        input_ptr + byte_indices + 1,
-        mask=output_mask & ((byte_indices + 1) < compressed_numel),
+    u1 = tl.load(
+        input_ptr + idx16 + 1,
+        mask=output_mask,
         other=0,
     ).to(tl.uint32)
 
-    byte2 = tl.load(
-        input_ptr + byte_indices + 2,
-        mask=output_mask & ((byte_indices + 2) < compressed_numel),
-        other=0,
-    ).to(tl.uint32)
-
-    packed_window = byte0 | (byte1 << 8) | (byte2 << 16)
-    restored = (packed_window >> bit_offsets) & 0x7FFF
+    window = u0 | (u1 << 16)
+    restored = (window >> (lo_shift + bit_offsets)) & 0x7FFF
 
     tl.store(
         output_ptr + output_offsets,
@@ -165,8 +163,13 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
 
     bits = data.contiguous().view(torch.uint16).reshape(-1)
 
+    # Pad so the byte stream can always be viewed as uint16 by the
+    # uncompress kernel (which reads two uint16 per value).
+    padded_numel = compressed_numel + 8
+    if padded_numel & 1:
+        padded_numel += 1
     output = torch.empty(
-        compressed_numel,
+        padded_numel,
         dtype=torch.uint8,
         device=device,
     )
@@ -223,7 +226,7 @@ def uncompress_fn(
     _uncompress_replay.capture(
         key=numel,
         ptr=compressed_tensor.data_ptr(),
-        input_tensor=compressed_tensor.contiguous().reshape(-1),
+        input_tensor=compressed_tensor.contiguous().reshape(-1).view(torch.uint16),
         output=restored_bits,
         grid=grid,
         numel=numel,
