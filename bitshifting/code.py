@@ -155,8 +155,6 @@ _uncompress_replay = _Replay(_uncompress_15bit_kernel)
 
 def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
     """Remove and bit-pack the sign bit from positive fp16/bf16 data."""
-    device = data.device if device is None else torch.device(device)
-
     numel = data.numel()
     compressed_numel = (numel * 15 + 7) // 8
 
@@ -201,12 +199,6 @@ def uncompress_fn(
     device=None,
 ) -> Tensor:
     """Restore fp16/bf16 data previously produced by ``compress_fn``."""
-    device = (
-        compressed_tensor.device
-        if device is None
-        else torch.device(device)
-    )
-
     numel = math.prod(shape)
     expected_bytes = (numel * 15 + 7) // 8
 
