@@ -2,10 +2,10 @@
 
 This is an experiment to have the LLM do its own research to improve a Triton kernel.
 
-The repo supports **multiple tasks**, each in its own subfolder. Every task has `prepare*.py` scripts (the read-only evaluation harness) plus several editable files containing Triton kernels, layer implementations, and helper code. The test is run using `prepare.py`. For example:
+The repo supports **multiple tasks**, each in its own subfolder. Every task has `prepare*.py` scripts (the read-only evaluation harness) plus editable files containing implementations, and helper code. The test is run using `prepare.py`. For example:
 
-- `lib_sparse/` — `prepare.py`, `prepare_layer.py` (read-only harness) + `sparse_pack.py`, `sparse_unpack.py`, `sparse.py` (editable)
-- `<task>/` — `prepare*.py` (read-only harness) + `sparse_*.py` and other helper files (editable; discover by listing the folder)
+- `lib_sparse/` — `prepare.py`, `prepare_layer.py` (read-only harness) + `code_pack.py`, `code_unpack.py`, `code.py` (editable)
+- `<task>/` — `prepare*.py` (read-only harness) + `code_*.py` and other helper files (editable; discover by listing the folder)
 
 ## Setup
 
@@ -16,7 +16,7 @@ To set up a new experiment, work with the user to:
 3. **Create the branch**: `git checkout -b autoresearch/<task>/<tag>` from current master.
 4. **Read the in-scope files**: List the task folder to find the exact filenames, then read all relevant files for full context:
    - `{task}/prepare*.py` — the evaluation harness. These are the scripts you **run**, but **do not modify**.
-   - `{task}/sparse_*.py` and any other `.py` files in the task folder NOT starting with `prepare` — these are the editable files. They contain the Triton kernel(s) and helper code under test.
+   - `{task}/code_*.py` and any other `.py` files in the task folder NOT starting with `prepare` — these are the editable files. They contain the Triton kernel(s) and helper code under test.
 5. **Initialize results.tsv**: Create `results_{task}.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
 
@@ -30,8 +30,8 @@ Each experiment runs on a single GPU. You launch it from the repo root as: `pyth
 - Modify any file in `{task}/` **except** files starting with `prepare` (e.g. `prepare.py`, `prepare_layer.py`). Almost everything else is fair game, just no cheating.
 - Change Triton kernels — block size, grid strategy, memory access patterns, use of atomics, etc.
 - Change host-side helper functions — different ways to compute block prefixes, different launch parameters, etc.
-- Add new Triton kernels (e.g., a Triton prefix-sum kernel to replace a PyTorch-side computation).
-- Tune kernel launch parameters like `BLOCK` size, number of warps, etc.
+- Add new Triton kernels.
+- Use autotune configuration to try different launch parameters, to a reasonable extent.
 
 **What you CANNOT do:**
 - Modify `{task}/prepare*.py`. These are read-only. They contain the fixed evaluation, data generation, and correctness checks.
