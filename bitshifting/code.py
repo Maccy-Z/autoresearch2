@@ -129,7 +129,7 @@ def compress_fn(data: Tensor, dtype=None, device=None) -> Tensor:
         device=device,
     )
 
-    block_size = 256
+    block_size = 1024
     grid = (triton.cdiv(compressed_numel, block_size),)
 
     _compress_15bit_kernel[grid](
@@ -169,7 +169,7 @@ def uncompress_fn(
         device=device,
     )
 
-    block_size = 256
+    block_size = 512
     grid = (triton.cdiv(numel, block_size),)
 
     _uncompress_15bit_kernel[grid](
