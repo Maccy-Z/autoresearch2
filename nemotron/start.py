@@ -64,7 +64,7 @@ def main():
     setup_hooks(model)
     model.train()
 
-    model.config.sparse_ffn = False
+    model.config.sparse_ffn = True
     # sparse_data = TensorBuffer(60_000_000)
     sparse_data = None
     model.config.sparse_data = sparse_data
